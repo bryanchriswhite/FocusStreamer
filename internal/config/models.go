@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -185,21 +186,23 @@ func (m *Manager) Update(cfg *Config) error {
 
 // AddAllowlistedApp adds an application to the allowlist
 func (m *Manager) AddAllowlistedApp(appClass string) error {
-	log.Printf("AddAllowlistedApp called for: %s", appClass)
+	// Viper lowercases all map keys, so we must do the same
+	normalizedKey := strings.ToLower(appClass)
+	log.Printf("AddAllowlistedApp called for: %s (normalized: %s)", appClass, normalizedKey)
 
 	// Get existing apps - use map[string]interface{} for Viper compatibility
 	apps := make(map[string]interface{})
 	existingApps := m.v.GetStringMap("allowlisted_apps")
-	log.Printf("Existing allowlisted apps before add: %v (type: %T)", existingApps, existingApps)
+	log.Printf("Existing allowlisted apps before add: %v", existingApps)
 
 	// Copy existing entries
 	for k, v := range existingApps {
 		apps[k] = v
 	}
 
-	// Add new app
-	apps[appClass] = true
-	log.Printf("Setting allowlisted_apps to: %v (type: %T)", apps, apps)
+	// Add new app with normalized key
+	apps[normalizedKey] = true
+	log.Printf("Setting allowlisted_apps to: %v", apps)
 	m.v.Set("allowlisted_apps", apps)
 
 	// Verify the set worked
@@ -211,12 +214,15 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 		return err
 	}
 
-	log.Printf("Successfully added '%s' to allowlist. Total allowlisted: %d", appClass, len(apps))
+	log.Printf("Successfully added '%s' (key: %s) to allowlist. Total: %d", appClass, normalizedKey, len(apps))
 	return nil
 }
 
 // RemoveAllowlistedApp removes an application from the allowlist
 func (m *Manager) RemoveAllowlistedApp(appClass string) error {
+	// Viper lowercases all map keys, so we must do the same
+	normalizedKey := strings.ToLower(appClass)
+
 	// Get existing apps - use map[string]interface{} for Viper compatibility
 	apps := make(map[string]interface{})
 	existingApps := m.v.GetStringMap("allowlisted_apps")
@@ -226,27 +232,24 @@ func (m *Manager) RemoveAllowlistedApp(appClass string) error {
 		apps[k] = v
 	}
 
-	// Remove app
-	delete(apps, appClass)
+	// Remove app with normalized key
+	delete(apps, normalizedKey)
 	m.v.Set("allowlisted_apps", apps)
 
 	if err := m.Save(); err != nil {
 		return err
 	}
 
-	log.Printf("Removed '%s' from allowlist. Total allowlisted: %d", appClass, len(apps))
+	log.Printf("Removed '%s' (key: %s) from allowlist. Total: %d", appClass, normalizedKey, len(apps))
 	return nil
 }
 
 // IsAllowlisted checks if an application is allowlisted
 func (m *Manager) IsAllowlisted(appClass string) bool {
+	// Viper lowercases all map keys, so we must normalize for lookup
+	normalizedKey := strings.ToLower(appClass)
 	apps := m.v.GetStringMap("allowlisted_apps")
-	val, exists := apps[appClass]
-
-	// Debug logging (only for first few checks to avoid spam)
-	if len(apps) > 0 {
-		log.Printf("IsAllowlisted check for '%s': exists=%v, total_apps=%d", appClass, exists, len(apps))
-	}
+	val, exists := apps[normalizedKey]
 
 	if !exists {
 		return false
