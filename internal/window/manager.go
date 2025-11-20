@@ -349,14 +349,36 @@ func (m *Manager) FindWindowByClass(windowClass string) (*config.WindowInfo, err
 
 // CaptureWindowScreenshot captures a screenshot of a window by ID and returns PNG data
 func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
+	win := xproto.Window(windowID)
+
+	// Check window attributes first
+	attrs, err := xproto.GetWindowAttributes(m.conn, win).Reply()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get window attributes: %w", err)
+	}
+
+	log.Printf("Window %d attributes: class=%d, mapState=%d", windowID, attrs.Class, attrs.MapState)
+
+	// Only InputOutput windows (class 1) can be captured
+	if attrs.Class != xproto.WindowClassInputOutput {
+		return nil, fmt.Errorf("window is not InputOutput (class=%d), cannot capture", attrs.Class)
+	}
+
+	// Window must be viewable (mapState 2) to capture reliably
+	if attrs.MapState != xproto.MapStateViewable {
+		log.Printf("Warning: Window map state is %d (not Viewable=2), capture may fail", attrs.MapState)
+	}
+
 	// Get window geometry
 	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowID)).Reply()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get window geometry: %w", err)
 	}
 
+	log.Printf("Window %d geometry: %dx%d at (%d,%d)", windowID, geom.Width, geom.Height, geom.X, geom.Y)
+
 	// Capture window image
-	img, err := m.captureWindow(xproto.Window(windowID), geom)
+	img, err := m.captureWindow(win, geom)
 	if err != nil {
 		return nil, fmt.Errorf("failed to capture window: %w", err)
 	}
@@ -376,25 +398,36 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 
 	// Use Composite extension if available for more reliable capture
 	if m.compositeEnabled {
-		// Create a pixmap ID and associate it with the window's off-screen buffer
-		// This works even if the window is obscured or off-screen
-		pixmap, err := xproto.NewPixmapId(m.conn)
+		// Redirect window to off-screen buffer for compositing
+		// Use CompositeRedirectAutomatic (0) for temporary redirection
+		err := composite.RedirectWindowChecked(m.conn, win, composite.RedirectAutomatic).Check()
 		if err != nil {
-			log.Printf("Warning: Failed to generate pixmap ID: %v", err)
+			log.Printf("Warning: Failed to redirect window via Composite: %v", err)
 			log.Printf("Falling back to direct window capture")
 			drawable = xproto.Drawable(win)
 		} else {
-			// Associate the pixmap with the window's off-screen buffer
-			err = composite.NameWindowPixmapChecked(m.conn, win, pixmap).Check()
+			// Ensure we unredirect when done
+			defer composite.UnredirectWindow(m.conn, win, composite.RedirectAutomatic)
+
+			// Create a pixmap ID and associate it with the window's off-screen buffer
+			pixmap, err := xproto.NewPixmapId(m.conn)
 			if err != nil {
-				log.Printf("Warning: Failed to name window pixmap via Composite: %v", err)
+				log.Printf("Warning: Failed to generate pixmap ID: %v", err)
 				log.Printf("Falling back to direct window capture")
 				drawable = xproto.Drawable(win)
 			} else {
-				drawable = xproto.Drawable(pixmap)
-				log.Printf("Using Composite pixmap for window capture")
-				// Free pixmap when done
-				defer xproto.FreePixmap(m.conn, pixmap)
+				// Associate the pixmap with the window's off-screen buffer
+				err = composite.NameWindowPixmapChecked(m.conn, win, pixmap).Check()
+				if err != nil {
+					log.Printf("Warning: Failed to name window pixmap via Composite: %v", err)
+					log.Printf("Falling back to direct window capture")
+					drawable = xproto.Drawable(win)
+				} else {
+					drawable = xproto.Drawable(pixmap)
+					log.Printf("Using Composite pixmap for window capture")
+					// Free pixmap when done
+					defer xproto.FreePixmap(m.conn, pixmap)
+				}
 			}
 		}
 	} else {
