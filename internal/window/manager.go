@@ -359,23 +359,34 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 
 	log.Printf("Window %d attributes: class=%d, mapState=%d", windowID, attrs.Class, attrs.MapState)
 
-	// Only InputOutput windows (class 1) can be captured
-	if attrs.Class != xproto.WindowClassInputOutput {
-		return nil, fmt.Errorf("window is not InputOutput (class=%d), cannot capture", attrs.Class)
-	}
+	// If window is not suitable for capture, try to find a suitable child window
+	if attrs.Class != xproto.WindowClassInputOutput || attrs.MapState != xproto.MapStateViewable {
+		log.Printf("Window %d not directly capturable, searching for child windows...", windowID)
 
-	// Window must be viewable (mapState 2) to capture reliably
-	if attrs.MapState != xproto.MapStateViewable {
-		log.Printf("Warning: Window map state is %d (not Viewable=2), capture may fail", attrs.MapState)
+		// Try to find a child window that can be captured
+		childWin, err := m.findCapturableChild(win)
+		if err != nil {
+			return nil, fmt.Errorf("no capturable window found: %w", err)
+		}
+
+		log.Printf("Found capturable child window: %d", childWin)
+		win = childWin
+
+		// Get attributes of child window
+		attrs, err = xproto.GetWindowAttributes(m.conn, win).Reply()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get child window attributes: %w", err)
+		}
+		log.Printf("Child window %d attributes: class=%d, mapState=%d", win, attrs.Class, attrs.MapState)
 	}
 
 	// Get window geometry
-	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowID)).Reply()
+	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(win)).Reply()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get window geometry: %w", err)
 	}
 
-	log.Printf("Window %d geometry: %dx%d at (%d,%d)", windowID, geom.Width, geom.Height, geom.X, geom.Y)
+	log.Printf("Window %d geometry: %dx%d at (%d,%d)", win, geom.Width, geom.Height, geom.X, geom.Y)
 
 	// Capture window image
 	img, err := m.captureWindow(win, geom)
@@ -390,6 +401,46 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// findCapturableChild recursively searches for a capturable child window
+func (m *Manager) findCapturableChild(parent xproto.Window) (xproto.Window, error) {
+	// Query child windows
+	tree, err := xproto.QueryTree(m.conn, parent).Reply()
+	if err != nil {
+		return 0, fmt.Errorf("failed to query tree: %w", err)
+	}
+
+	// Search through children for a capturable window
+	for _, child := range tree.Children {
+		attrs, err := xproto.GetWindowAttributes(m.conn, child).Reply()
+		if err != nil {
+			continue
+		}
+
+		// Check if this child is capturable
+		if attrs.Class == xproto.WindowClassInputOutput && attrs.MapState == xproto.MapStateViewable {
+			// Verify it has some size
+			geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(child)).Reply()
+			if err != nil {
+				continue
+			}
+
+			// Must have reasonable dimensions
+			if geom.Width > 10 && geom.Height > 10 {
+				log.Printf("Found capturable child: %d (class=%d, mapState=%d, size=%dx%d)",
+					child, attrs.Class, attrs.MapState, geom.Width, geom.Height)
+				return child, nil
+			}
+		}
+
+		// Recursively search this child's children
+		if grandchild, err := m.findCapturableChild(child); err == nil {
+			return grandchild, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no capturable child found")
 }
 
 // captureWindow captures a window's content as an image
