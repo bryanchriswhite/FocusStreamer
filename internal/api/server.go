@@ -79,11 +79,18 @@ func (s *Server) createStaticHandler() http.Handler {
 	// Get the web/dist directory path
 	webDistPath := filepath.Join("web", "dist")
 
+	// Get absolute path for better debugging
+	absPath, _ := filepath.Abs(webDistPath)
+	log.Printf("Looking for web UI at: %s", absPath)
+
 	// Check if the directory exists
 	if _, err := os.Stat(webDistPath); os.IsNotExist(err) {
-		log.Printf("Warning: web/dist directory not found at %s, serving fallback HTML", webDistPath)
+		log.Printf("Warning: web/dist directory not found at %s", absPath)
+		log.Printf("Serving fallback HTML. To see the React UI, run from project root: cd /path/to/FocusStreamer && ./build/focusstreamer serve")
 		return http.HandlerFunc(s.handleFallbackIndex)
 	}
+
+	log.Printf("✅ Found web UI build at: %s", absPath)
 
 	// Create file server for the dist directory
 	fileServer := http.FileServer(http.Dir(webDistPath))
