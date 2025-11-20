@@ -187,22 +187,19 @@ func (m *Manager) Update(cfg *Config) error {
 func (m *Manager) AddAllowlistedApp(appClass string) error {
 	log.Printf("AddAllowlistedApp called for: %s", appClass)
 
-	// Get existing apps as a proper map[string]bool
-	apps := make(map[string]bool)
+	// Get existing apps - use map[string]interface{} for Viper compatibility
+	apps := make(map[string]interface{})
 	existingApps := m.v.GetStringMap("allowlisted_apps")
-	log.Printf("Existing allowlisted apps before add: %v", existingApps)
+	log.Printf("Existing allowlisted apps before add: %v (type: %T)", existingApps, existingApps)
 
+	// Copy existing entries
 	for k, v := range existingApps {
-		if b, ok := v.(bool); ok {
-			apps[k] = b
-		} else {
-			apps[k] = true // Default to true for any non-bool value
-		}
+		apps[k] = v
 	}
 
 	// Add new app
 	apps[appClass] = true
-	log.Printf("Setting allowlisted_apps to: %v", apps)
+	log.Printf("Setting allowlisted_apps to: %v (type: %T)", apps, apps)
 	m.v.Set("allowlisted_apps", apps)
 
 	// Verify the set worked
@@ -220,15 +217,13 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 
 // RemoveAllowlistedApp removes an application from the allowlist
 func (m *Manager) RemoveAllowlistedApp(appClass string) error {
-	// Get existing apps as a proper map[string]bool
-	apps := make(map[string]bool)
+	// Get existing apps - use map[string]interface{} for Viper compatibility
+	apps := make(map[string]interface{})
 	existingApps := m.v.GetStringMap("allowlisted_apps")
+
+	// Copy existing entries
 	for k, v := range existingApps {
-		if b, ok := v.(bool); ok {
-			apps[k] = b
-		} else {
-			apps[k] = true
-		}
+		apps[k] = v
 	}
 
 	// Remove app
