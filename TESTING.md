@@ -54,10 +54,10 @@ curl http://localhost:8080/api/window/current
 curl http://localhost:8080/api/config
 ```
 
-4. **Add an application to whitelist:**
+4. **Add an application to allowlist:**
 ```bash
 # Replace "firefox" with an actual window class from /api/applications
-curl -X POST http://localhost:8080/api/applications/whitelist \
+curl -X POST http://localhost:8080/api/applications/allowlist \
   -H "Content-Type: application/json" \
   -d '{"app_class":"firefox"}'
 ```
@@ -109,23 +109,23 @@ Open `http://localhost:3000` in your browser.
 2. Observe the "Current Window" section in the UI
 3. Or check via API: `curl http://localhost:8080/api/window/current`
 
-### 3. Whitelisting
+### 3. Allowlisting
 
 **Via UI:**
 1. Find an application in the list
-2. Click "Add" to whitelist it
+2. Click "Add" to allowlist it
 3. The button should change to "Remove"
 4. The application card should turn green
 
 **Via API:**
 ```bash
-# Add to whitelist
-curl -X POST http://localhost:8080/api/applications/whitelist \
+# Add to allowlist
+curl -X POST http://localhost:8080/api/applications/allowlist \
   -H "Content-Type: application/json" \
   -d '{"app_class":"gnome-terminal-server"}'
 
-# Remove from whitelist
-curl -X DELETE http://localhost:8080/api/applications/whitelist/gnome-terminal-server
+# Remove from allowlist
+curl -X DELETE http://localhost:8080/api/applications/allowlist/gnome-terminal-server
 ```
 
 ### 4. Pattern Matching
@@ -134,7 +134,7 @@ curl -X DELETE http://localhost:8080/api/applications/whitelist/gnome-terminal-s
 1. Go to "Pattern Matching" section
 2. Enter a regex pattern like `.*Terminal.*`
 3. Click "Add Pattern"
-4. Applications matching the pattern should auto-whitelist
+4. Applications matching the pattern should auto-allowlist
 
 **Via API:**
 ```bash
@@ -151,7 +151,7 @@ curl -X DELETE http://localhost:8080/api/config/patterns \
 
 ### 5. Configuration Persistence
 
-1. Add some applications to whitelist
+1. Add some applications to allowlist
 2. Add some patterns
 3. Stop the server (Ctrl+C)
 4. Restart the server
@@ -166,21 +166,21 @@ curl -X DELETE http://localhost:8080/api/config/patterns \
 1. Start FocusStreamer
 2. Open the web UI
 3. Open Firefox and VSCode
-4. Add both to whitelist
+4. Add both to allowlist
 5. Focus Firefox - check "Current Window" shows Firefox
 6. Focus VSCode - check "Current Window" shows VSCode
-7. Focus another app (not whitelisted) - check "Current Window" shows it
+7. Focus another app (not allowlisted) - check "Current Window" shows it
 
 ### Scenario 2: Pattern Matching
 
 1. Add pattern: `.*firefox.*` (case-insensitive)
 2. Open multiple Firefox windows
-3. All should auto-whitelist
-4. Open Chrome - should not whitelist
+3. All should auto-allowlist
+4. Open Chrome - should not allowlist
 
 ### Scenario 3: Configuration Export/Import
 
-1. Configure whitelist and patterns
+1. Configure allowlist and patterns
 2. Check `~/.config/focusstreamer/config.json`
 3. Copy config to backup
 4. Delete config file

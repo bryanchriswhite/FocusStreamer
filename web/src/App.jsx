@@ -70,15 +70,15 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Toggle whitelist
-  const toggleWhitelist = async (appClass, isWhitelisted) => {
+  // Toggle allowlist
+  const toggleAllowlist = async (appClass, isAllowlisted) => {
     try {
-      if (isWhitelisted) {
-        await fetch(`/api/applications/whitelist/${appClass}`, {
+      if (isAllowlisted) {
+        await fetch(`/api/applications/allowlist/${appClass}`, {
           method: 'DELETE'
         })
       } else {
-        await fetch('/api/applications/whitelist', {
+        await fetch('/api/applications/allowlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ app_class: appClass })
@@ -153,17 +153,17 @@ function App() {
             </p>
             <ApplicationList
               applications={applications}
-              onToggleWhitelist={toggleWhitelist}
+              onToggleAllowlist={toggleAllowlist}
             />
           </section>
 
           <section className="section">
             <h2>Pattern Matching</h2>
             <p className="section-description">
-              Use regex patterns to automatically whitelist applications.
+              Use regex patterns to automatically allowlist applications.
             </p>
             <PatternManager
-              patterns={config?.whitelist_patterns || []}
+              patterns={config?.allowlist_patterns || []}
               onAddPattern={addPattern}
               onRemovePattern={removePattern}
             />
@@ -175,10 +175,10 @@ function App() {
             <h3>How to Use</h3>
             <ol>
               <li>Select applications you want to share</li>
-              <li>Or add regex patterns for auto-whitelisting</li>
+              <li>Or add regex patterns for auto-allowlisting</li>
               <li>Start Discord screen share</li>
               <li>Share the FocusStreamer window</li>
-              <li>Only whitelisted focused windows will appear</li>
+              <li>Only allowlisted focused windows will appear</li>
             </ol>
           </div>
 
@@ -189,15 +189,15 @@ function App() {
               <span className="status-value">{applications.length}</span>
             </div>
             <div className="status-item">
-              <span className="status-label">Whitelisted:</span>
+              <span className="status-label">Allowlisted:</span>
               <span className="status-value">
-                {applications.filter(a => a.whitelisted).length}
+                {applications.filter(a => a.allowlisted).length}
               </span>
             </div>
             <div className="status-item">
               <span className="status-label">Patterns:</span>
               <span className="status-value">
-                {config?.whitelist_patterns?.length || 0}
+                {config?.allowlist_patterns?.length || 0}
               </span>
             </div>
           </div>

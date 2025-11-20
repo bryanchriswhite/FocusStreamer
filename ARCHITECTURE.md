@@ -8,22 +8,22 @@ FocusStreamer is a tool that creates a virtual display for Discord screen sharin
 ### 1. Go Backend (`cmd/server/`)
 - **HTTP Server**: Serves the React UI and provides REST API endpoints
 - **X11 Integration**: Monitors window focus events and retrieves window information
-- **Window Manager**: Tracks active windows and applies whitelist filters
+- **Window Manager**: Tracks active windows and applies allowlist filters
 - **Virtual Display Manager**: Creates and manages the virtual display output
-- **Configuration Manager**: Handles application whitelist and pattern matching
+- **Configuration Manager**: Handles application allowlist and pattern matching
 
 ### 2. React Frontend (`web/`)
 - **Vite + React**: Modern development setup with hot reload
 - **Application List**: Displays currently running applications
-- **Whitelist Manager**: UI to add/remove applications from whitelist
-- **Pattern Matching**: Configure regex patterns for auto-whitelisting
+- **Allowlist Manager**: UI to add/remove applications from allowlist
+- **Pattern Matching**: Configure regex patterns for auto-allowlisting
 - **Status Display**: Shows current virtual display state and focused window
 
 ### 3. Virtual Display Strategy
 
 #### Phase 1: Window Capture and Composition (Initial Implementation)
 - Monitor X11 for focused window changes
-- Capture the focused window if it matches whitelist
+- Capture the focused window if it matches allowlist
 - Composite the window content onto a designated display area
 - Use existing display with a dedicated window/area that can be shared
 
@@ -51,9 +51,9 @@ FocusStreamer is a tool that creates a virtual display for Discord screen sharin
 
 ### Application Management
 - `GET /api/applications` - List all running applications
-- `GET /api/applications/whitelisted` - Get whitelisted applications
-- `POST /api/applications/whitelist` - Add application to whitelist
-- `DELETE /api/applications/whitelist/:id` - Remove from whitelist
+- `GET /api/applications/allowlisted` - Get allowlisted applications
+- `POST /api/applications/allowlist` - Add application to allowlist
+- `DELETE /api/applications/allowlist/:id` - Remove from allowlist
 
 ### Window State
 - `GET /api/window/current` - Get currently focused window
@@ -76,7 +76,7 @@ type Application struct {
     Name        string `json:"name"`
     WindowClass string `json:"window_class"`
     PID         int    `json:"pid"`
-    Whitelisted bool   `json:"whitelisted"`
+    Allowlisted bool   `json:"allowlisted"`
 }
 
 type WindowInfo struct {
@@ -89,8 +89,8 @@ type WindowInfo struct {
 }
 
 type Config struct {
-    WhitelistPatterns []string          `json:"whitelist_patterns"`
-    WhitelistedApps   map[string]bool   `json:"whitelisted_apps"`
+    AllowlistPatterns []string          `json:"allowlist_patterns"`
+    AllowlistedApps   map[string]bool   `json:"allowlisted_apps"`
     VirtualDisplay    VirtualDisplayConfig `json:"virtual_display"`
 }
 
@@ -113,18 +113,18 @@ type VirtualDisplayConfig struct {
 2. **User Interaction**:
    - User opens web UI at http://localhost:8080
    - UI displays list of running applications
-   - User whitelists desired applications or sets patterns
+   - User allowlists desired applications or sets patterns
    - Configuration is saved to disk
 
 3. **Window Filtering**:
    - X11 monitor detects window focus changes
-   - Checks if focused window matches whitelist
+   - Checks if focused window matches allowlist
    - If matched, captures window content
    - Updates virtual display/stream window
 
 4. **Discord Sharing**:
    - User shares the virtual display window in Discord
-   - Only whitelisted focused windows appear in the stream
+   - Only allowlisted focused windows appear in the stream
    - Other windows/desktop are hidden from stream
 
 ## Development Phases
@@ -133,12 +133,12 @@ type VirtualDisplayConfig struct {
 - [x] Project structure
 - [ ] Go HTTP server with basic endpoints
 - [ ] X11 window detection and monitoring
-- [ ] Whitelist management (in-memory)
+- [ ] Allowlist management (in-memory)
 
 ### Phase 2: Frontend UI
 - [ ] React + Vite setup
 - [ ] Application list display
-- [ ] Whitelist management UI
+- [ ] Allowlist management UI
 - [ ] Real-time updates via WebSocket
 
 ### Phase 3: Window Capture

@@ -65,7 +65,7 @@ function PatternManager({ patterns, onAddPattern, onRemovePattern }) {
       ) : (
         <div className="empty-patterns">
           <p>No patterns configured</p>
-          <p className="hint">Add regex patterns to auto-whitelist applications</p>
+          <p className="hint">Add regex patterns to auto-allowlist applications</p>
         </div>
       )}
     </div>

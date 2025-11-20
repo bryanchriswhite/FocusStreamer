@@ -48,9 +48,9 @@ func (s *Server) setupRoutes() {
 
 	// Application management
 	api.HandleFunc("/applications", s.handleGetApplications).Methods("GET")
-	api.HandleFunc("/applications/whitelisted", s.handleGetWhitelisted).Methods("GET")
-	api.HandleFunc("/applications/whitelist", s.handleAddToWhitelist).Methods("POST")
-	api.HandleFunc("/applications/whitelist/{id}", s.handleRemoveFromWhitelist).Methods("DELETE")
+	api.HandleFunc("/applications/allowlisted", s.handleGetAllowlisted).Methods("GET")
+	api.HandleFunc("/applications/allowlist", s.handleAddToAllowlist).Methods("POST")
+	api.HandleFunc("/applications/allowlist/{id}", s.handleRemoveFromAllowlist).Methods("DELETE")
 
 	// Window state
 	api.HandleFunc("/window/current", s.handleGetCurrentWindow).Methods("GET")
@@ -109,26 +109,26 @@ func (s *Server) handleGetApplications(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(apps)
 }
 
-func (s *Server) handleGetWhitelisted(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetAllowlisted(w http.ResponseWriter, r *http.Request) {
 	apps, err := s.windowMgr.GetApplications()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Filter whitelisted apps
-	whitelisted := make([]config.Application, 0)
+	// Filter allowlisted apps
+	allowlisted := make([]config.Application, 0)
 	for _, app := range apps {
-		if app.Whitelisted {
-			whitelisted = append(whitelisted, app)
+		if app.Allowlisted {
+			allowlisted = append(allowlisted, app)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(whitelisted)
+	json.NewEncoder(w).Encode(allowlisted)
 }
 
-func (s *Server) handleAddToWhitelist(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAddToAllowlist(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AppClass string `json:"app_class"`
 	}
@@ -138,7 +138,7 @@ func (s *Server) handleAddToWhitelist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.configMgr.AddWhitelistedApp(req.AppClass); err != nil {
+	if err := s.configMgr.AddAllowlistedApp(req.AppClass); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -147,11 +147,11 @@ func (s *Server) handleAddToWhitelist(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
-func (s *Server) handleRemoveFromWhitelist(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRemoveFromAllowlist(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	appClass := vars["id"]
 
-	if err := s.configMgr.RemoveWhitelistedApp(appClass); err != nil {
+	if err := s.configMgr.RemoveAllowlistedApp(appClass); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -353,7 +353,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
                 <li><a href="/api/window/current">/api/window/current</a> - Current focused window</li>
             </ul>
             <h3>Coming Soon:</h3>
-            <p>React-based web UI for managing whitelisted applications and configuration.</p>
+            <p>React-based web UI for managing allowlisted applications and configuration.</p>
             <p>In the meantime, you can use the API endpoints directly or with tools like <code>curl</code>.</p>
         </div>
     </div>

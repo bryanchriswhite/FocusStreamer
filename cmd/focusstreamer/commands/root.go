@@ -20,8 +20,8 @@ configurable filters.
 Features:
   • Detect running applications via X11
   • Track focused window in real-time
-  • Whitelist specific applications
-  • Use regex patterns for auto-whitelisting
+  • Allowlist specific applications
+  • Use regex patterns for auto-allowlisting
   • Persistent configuration
   • REST API for integration
   • Modern web UI for configuration`,

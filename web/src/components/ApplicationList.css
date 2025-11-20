@@ -19,7 +19,7 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
-.application-item.whitelisted {
+.application-item.allowlisted {
   border-color: #4caf50;
   background-color: #f1f8f4;
 }

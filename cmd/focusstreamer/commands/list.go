@@ -24,8 +24,8 @@ all currently running applications and their windows.`,
   # List applications in JSON format
   focusstreamer list --format json
 
-  # List only whitelisted applications
-  focusstreamer list --whitelisted
+  # List only allowlisted applications
+  focusstreamer list --allowlisted
 
   # List the currently focused window
   focusstreamer list --current`,
@@ -34,7 +34,7 @@ all currently running applications and their windows.`,
 
 var (
 	listFormat      string
-	listWhitelisted bool
+	listAllowlisted bool
 	listCurrent     bool
 )
 
@@ -42,7 +42,7 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 
 	listCmd.Flags().StringVarP(&listFormat, "format", "f", "table", "output format (table or json)")
-	listCmd.Flags().BoolVarP(&listWhitelisted, "whitelisted", "w", false, "show only whitelisted applications")
+	listCmd.Flags().BoolVarP(&listAllowlisted, "allowlisted", "w", false, "show only allowlisted applications")
 	listCmd.Flags().BoolVarP(&listCurrent, "current", "c", false, "show current focused window")
 }
 
@@ -71,11 +71,11 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get applications: %w", err)
 	}
 
-	// Filter whitelisted if requested
-	if listWhitelisted {
+	// Filter allowlisted if requested
+	if listAllowlisted {
 		filtered := make([]config.Application, 0)
 		for _, app := range apps {
-			if app.Whitelisted {
+			if app.Allowlisted {
 				filtered = append(filtered, app)
 			}
 		}
@@ -99,15 +99,15 @@ func printAppsTable(apps []config.Application) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	defer w.Flush()
 
-	fmt.Fprintln(w, "NAME\tCLASS\tPID\tWHITELISTED")
+	fmt.Fprintln(w, "NAME\tCLASS\tPID\tALLOWLISTED")
 	fmt.Fprintln(w, "----\t-----\t---\t-----------")
 
 	for _, app := range apps {
-		whitelisted := "No"
-		if app.Whitelisted {
-			whitelisted = "Yes"
+		allowlisted := "No"
+		if app.Allowlisted {
+			allowlisted = "Yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", app.Name, app.WindowClass, app.PID, whitelisted)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", app.Name, app.WindowClass, app.PID, allowlisted)
 	}
 
 	return nil

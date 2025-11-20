@@ -14,7 +14,7 @@ type Application struct {
 	Name        string `json:"name" mapstructure:"name"`
 	WindowClass string `json:"window_class" mapstructure:"window_class"`
 	PID         int    `json:"pid" mapstructure:"pid"`
-	Whitelisted bool   `json:"whitelisted" mapstructure:"whitelisted"`
+	Allowlisted bool   `json:"allowlisted" mapstructure:"allowlisted"`
 }
 
 // WindowInfo represents information about a window
@@ -37,8 +37,8 @@ type Geometry struct {
 
 // Config represents the application configuration
 type Config struct {
-	WhitelistPatterns []string        `json:"whitelist_patterns" mapstructure:"whitelist_patterns"`
-	WhitelistedApps   map[string]bool `json:"whitelisted_apps" mapstructure:"whitelisted_apps"`
+	AllowlistPatterns []string        `json:"allowlist_patterns" mapstructure:"allowlist_patterns"`
+	AllowlistedApps   map[string]bool `json:"allowlisted_apps" mapstructure:"allowlisted_apps"`
 	VirtualDisplay    DisplayConfig   `json:"virtual_display" mapstructure:"virtual_display"`
 	ServerPort        int             `json:"server_port" mapstructure:"server_port"`
 	LogLevel          string          `json:"log_level" mapstructure:"log_level"`
@@ -113,8 +113,8 @@ func NewManager(configFile string) (*Manager, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("server_port", 8080)
 	v.SetDefault("log_level", "info")
-	v.SetDefault("whitelist_patterns", []string{})
-	v.SetDefault("whitelisted_apps", map[string]bool{})
+	v.SetDefault("allowlist_patterns", []string{})
+	v.SetDefault("allowlisted_apps", map[string]bool{})
 	v.SetDefault("virtual_display.width", 1920)
 	v.SetDefault("virtual_display.height", 1080)
 	v.SetDefault("virtual_display.refresh_hz", 60)
@@ -135,8 +135,8 @@ func (m *Manager) Get() *Config {
 		return &Config{
 			ServerPort:        m.v.GetInt("server_port"),
 			LogLevel:          m.v.GetString("log_level"),
-			WhitelistPatterns: []string{},
-			WhitelistedApps:   make(map[string]bool),
+			AllowlistPatterns: []string{},
+			AllowlistedApps:   make(map[string]bool),
 			VirtualDisplay: DisplayConfig{
 				Width:     1920,
 				Height:    1080,
@@ -148,8 +148,8 @@ func (m *Manager) Get() *Config {
 	}
 
 	// Ensure maps are initialized
-	if cfg.WhitelistedApps == nil {
-		cfg.WhitelistedApps = make(map[string]bool)
+	if cfg.AllowlistedApps == nil {
+		cfg.AllowlistedApps = make(map[string]bool)
 	}
 
 	return &cfg
@@ -162,33 +162,33 @@ func (m *Manager) Save() error {
 
 // Update updates the entire configuration
 func (m *Manager) Update(cfg *Config) error {
-	m.v.Set("whitelist_patterns", cfg.WhitelistPatterns)
-	m.v.Set("whitelisted_apps", cfg.WhitelistedApps)
+	m.v.Set("allowlist_patterns", cfg.AllowlistPatterns)
+	m.v.Set("allowlisted_apps", cfg.AllowlistedApps)
 	m.v.Set("virtual_display", cfg.VirtualDisplay)
 	m.v.Set("server_port", cfg.ServerPort)
 	m.v.Set("log_level", cfg.LogLevel)
 	return m.Save()
 }
 
-// AddWhitelistedApp adds an application to the whitelist
-func (m *Manager) AddWhitelistedApp(appClass string) error {
-	apps := m.v.GetStringMap("whitelisted_apps")
+// AddAllowlistedApp adds an application to the allowlist
+func (m *Manager) AddAllowlistedApp(appClass string) error {
+	apps := m.v.GetStringMap("allowlisted_apps")
 	apps[appClass] = true
-	m.v.Set("whitelisted_apps", apps)
+	m.v.Set("allowlisted_apps", apps)
 	return m.Save()
 }
 
-// RemoveWhitelistedApp removes an application from the whitelist
-func (m *Manager) RemoveWhitelistedApp(appClass string) error {
-	apps := m.v.GetStringMap("whitelisted_apps")
+// RemoveAllowlistedApp removes an application from the allowlist
+func (m *Manager) RemoveAllowlistedApp(appClass string) error {
+	apps := m.v.GetStringMap("allowlisted_apps")
 	delete(apps, appClass)
-	m.v.Set("whitelisted_apps", apps)
+	m.v.Set("allowlisted_apps", apps)
 	return m.Save()
 }
 
-// IsWhitelisted checks if an application is whitelisted
-func (m *Manager) IsWhitelisted(appClass string) bool {
-	apps := m.v.GetStringMap("whitelisted_apps")
+// IsAllowlisted checks if an application is allowlisted
+func (m *Manager) IsAllowlisted(appClass string) bool {
+	apps := m.v.GetStringMap("allowlisted_apps")
 	val, exists := apps[appClass]
 	if !exists {
 		return false
@@ -202,24 +202,24 @@ func (m *Manager) IsWhitelisted(appClass string) bool {
 	}
 }
 
-// AddPattern adds a whitelist pattern
+// AddPattern adds an allowlist pattern
 func (m *Manager) AddPattern(pattern string) error {
-	patterns := m.v.GetStringSlice("whitelist_patterns")
+	patterns := m.v.GetStringSlice("allowlist_patterns")
 	patterns = append(patterns, pattern)
-	m.v.Set("whitelist_patterns", patterns)
+	m.v.Set("allowlist_patterns", patterns)
 	return m.Save()
 }
 
-// RemovePattern removes a whitelist pattern
+// RemovePattern removes an allowlist pattern
 func (m *Manager) RemovePattern(pattern string) error {
-	patterns := m.v.GetStringSlice("whitelist_patterns")
+	patterns := m.v.GetStringSlice("allowlist_patterns")
 	for i, p := range patterns {
 		if p == pattern {
 			patterns = append(patterns[:i], patterns[i+1:]...)
 			break
 		}
 	}
-	m.v.Set("whitelist_patterns", patterns)
+	m.v.Set("allowlist_patterns", patterns)
 	return m.Save()
 }
 

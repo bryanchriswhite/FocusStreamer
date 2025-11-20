@@ -406,7 +406,7 @@ func (m *Manager) GetWindowID() uint32 {
 }
 
 // UpdateLoop continuously updates the display based on focused window
-func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isWhitelisted func(*config.WindowInfo) bool) {
+func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllowlisted func(*config.WindowInfo) bool) {
 	// Calculate update interval from FPS (e.g., 10 FPS = 100ms, 30 FPS = 33ms)
 	updateInterval := time.Duration(1000/m.fps) * time.Millisecond
 	ticker := time.NewTicker(updateInterval)
@@ -427,8 +427,8 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isWhite
 
 			window := getCurrentWindow()
 
-			// If no window or not whitelisted, clear display
-			if window == nil || !isWhitelisted(window) {
+			// If no window or not allowlisted, clear display
+			if window == nil || !isAllowlisted(window) {
 				if lastWindowID != 0 {
 					m.ClearDisplay()
 					lastWindowID = 0

@@ -20,7 +20,7 @@ var serveCmd = &cobra.Command{
 	Short: "Start the FocusStreamer server",
 	Long: `Start the FocusStreamer HTTP server with X11 window monitoring.
 
-The server provides a REST API and web UI for managing application whitelists
+The server provides a REST API and web UI for managing application allowlists
 and viewing the currently focused window.`,
 	Example: `  # Start server on default port (8080)
   focusstreamer serve
@@ -106,7 +106,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		// Start display update loop
 		go displayMgr.UpdateLoop(
 			windowMgr.GetCurrentWindow,
-			windowMgr.IsWindowWhitelisted,
+			windowMgr.IsWindowAllowlisted,
 		)
 
 		log.Printf("Virtual display created (Window ID: %d)", displayMgr.GetWindowID())

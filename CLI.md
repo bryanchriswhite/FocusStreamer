@@ -10,7 +10,7 @@ FocusStreamer provides a comprehensive command-line interface built with Cobra a
   - [serve](#serve)
   - [config](#config)
   - [list](#list)
-  - [whitelist](#whitelist)
+  - [allowlist](#allowlist)
   - [pattern](#pattern)
 - [Configuration File](#configuration-file)
 - [Examples](#examples)
@@ -158,7 +158,7 @@ focusstreamer list [flags]
 
 **Flags:**
 - `-f, --format` - Output format: `table` or `json` (default: `table`)
-- `-w, --whitelisted` - Show only whitelisted applications
+- `-w, --allowlisted` - Show only allowlisted applications
 - `-c, --current` - Show current focused window
 
 **Examples:**
@@ -170,8 +170,8 @@ focusstreamer list
 # List applications in JSON format
 focusstreamer list --format json
 
-# List only whitelisted applications
-focusstreamer list --whitelisted
+# List only allowlisted applications
+focusstreamer list --allowlisted
 
 # Show currently focused window
 focusstreamer list --current
@@ -191,62 +191,62 @@ Code                  code                  12347    Yes
 
 ---
 
-### whitelist
+### allowlist
 
-Manage application whitelist.
+Manage application allowlist.
 
-#### whitelist add
+#### allowlist add
 
-Add an application to the whitelist by its window class.
+Add an application to the allowlist by its window class.
 
 ```bash
-focusstreamer whitelist add CLASS
+focusstreamer allowlist add CLASS
 ```
 
 **Examples:**
 
 ```bash
-# Add Firefox to whitelist
-focusstreamer whitelist add firefox
+# Add Firefox to allowlist
+focusstreamer allowlist add firefox
 
-# Add terminal to whitelist
-focusstreamer whitelist add gnome-terminal-server
+# Add terminal to allowlist
+focusstreamer allowlist add gnome-terminal-server
 
-# Add VS Code to whitelist
-focusstreamer whitelist add code
+# Add VS Code to allowlist
+focusstreamer allowlist add code
 ```
 
-#### whitelist remove
+#### allowlist remove
 
-Remove an application from the whitelist.
+Remove an application from the allowlist.
 
 ```bash
-focusstreamer whitelist remove CLASS
+focusstreamer allowlist remove CLASS
 ```
 
 **Examples:**
 
 ```bash
-# Remove Firefox from whitelist
-focusstreamer whitelist remove firefox
+# Remove Firefox from allowlist
+focusstreamer allowlist remove firefox
 ```
 
-#### whitelist list
+#### allowlist list
 
-Display all whitelisted applications and patterns.
+Display all allowlisted applications and patterns.
 
 ```bash
-focusstreamer whitelist list
+focusstreamer allowlist list
 ```
 
 **Output:**
 ```
-Whitelisted Applications:
+Allowlisted Applications:
   • firefox
   • code
   • gnome-terminal-server
 
-Whitelist Patterns:
+Allowlist Patterns:
   • .*Terminal.*
   • .*Code.*
 ```
@@ -255,13 +255,13 @@ Whitelist Patterns:
 
 ### pattern
 
-Manage regex patterns for auto-whitelisting applications.
+Manage regex patterns for auto-allowlisting applications.
 
 Patterns are matched against both window class and window title.
 
 #### pattern add
 
-Add a regex pattern for auto-whitelisting.
+Add a regex pattern for auto-allowlisting.
 
 ```bash
 focusstreamer pattern add PATTERN
@@ -285,7 +285,7 @@ focusstreamer pattern add ".*(firefox|chrome|chromium).*"
 
 #### pattern remove
 
-Remove a regex pattern from auto-whitelisting.
+Remove a regex pattern from auto-allowlisting.
 
 ```bash
 focusstreamer pattern remove PATTERN
@@ -300,7 +300,7 @@ focusstreamer pattern remove ".*Terminal.*"
 
 #### pattern list
 
-Display all configured whitelist patterns.
+Display all configured allowlist patterns.
 
 ```bash
 focusstreamer pattern list
@@ -308,7 +308,7 @@ focusstreamer pattern list
 
 **Output:**
 ```
-Whitelist Patterns:
+Allowlist Patterns:
   1. .*Terminal.*
   2. .*Code.*
   3. ^firefox$
@@ -330,11 +330,11 @@ $HOME/.config/focusstreamer/config.yaml
 server_port: 8080
 log_level: info
 
-whitelist_patterns:
+allowlist_patterns:
   - ".*Terminal.*"
   - ".*Code.*"
 
-whitelisted_apps:
+allowlisted_apps:
   firefox: true
   code: true
   gnome-terminal-server: true
@@ -352,8 +352,8 @@ virtual_display:
 |-----|------|-------------|---------|
 | `server_port` | int | HTTP server port | `8080` |
 | `log_level` | string | Logging level | `info` |
-| `whitelist_patterns` | []string | Regex patterns for auto-whitelist | `[]` |
-| `whitelisted_apps` | map | Explicitly whitelisted apps | `{}` |
+| `allowlist_patterns` | []string | Regex patterns for auto-allowlist | `[]` |
+| `allowlisted_apps` | map | Explicitly allowlisted apps | `{}` |
 | `virtual_display.width` | int | Virtual display width | `1920` |
 | `virtual_display.height` | int | Virtual display height | `1080` |
 | `virtual_display.refresh_hz` | int | Virtual display refresh rate | `60` |
@@ -372,9 +372,9 @@ make build
 # 2. Check available applications
 ./build/focusstreamer list
 
-# 3. Add applications to whitelist
-./build/focusstreamer whitelist add firefox
-./build/focusstreamer whitelist add code
+# 3. Add applications to allowlist
+./build/focusstreamer allowlist add firefox
+./build/focusstreamer allowlist add code
 
 # 4. Add a pattern for all terminal apps
 ./build/focusstreamer pattern add ".*Terminal.*"
@@ -382,8 +382,8 @@ make build
 # 5. View current configuration
 ./build/focusstreamer config show
 
-# 6. Check what's whitelisted
-./build/focusstreamer whitelist list
+# 6. Check what's allowlisted
+./build/focusstreamer allowlist list
 
 # 7. Start the server
 ./build/focusstreamer serve
@@ -428,7 +428,7 @@ focusstreamer pattern add ".*[Cc]ode.*"
 
 ```bash
 # Get all applications as JSON
-focusstreamer list --format json | jq '.[] | select(.whitelisted == true)'
+focusstreamer list --format json | jq '.[] | select(.allowlisted == true)'
 
 # Get current window info as JSON
 focusstreamer list --current --format json | jq '.class'
@@ -448,7 +448,7 @@ watch -n 1 'focusstreamer list --current'
 
 # Test pattern matching
 focusstreamer pattern add ".*Test.*"
-focusstreamer list --whitelisted
+focusstreamer list --allowlisted
 ```
 
 ---
@@ -471,12 +471,12 @@ To find the window class of an application:
 ```bash
 # Add multiple applications
 for app in firefox chrome code terminal; do
-    focusstreamer whitelist add $app
+    focusstreamer allowlist add $app
 done
 
 # Remove all patterns and start fresh
 focusstreamer config show --format json | \
-    jq -r '.whitelist_patterns[]' | \
+    jq -r '.allowlist_patterns[]' | \
     while read pattern; do
         focusstreamer pattern remove "$pattern"
     done

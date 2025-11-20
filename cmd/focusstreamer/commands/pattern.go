@@ -10,16 +10,16 @@ import (
 
 var patternCmd = &cobra.Command{
 	Use:   "pattern",
-	Short: "Manage whitelist patterns",
-	Long: `Add or remove regex patterns for auto-whitelisting applications.
+	Short: "Manage allowlist patterns",
+	Long: `Add or remove regex patterns for auto-allowlisting applications.
 
 Patterns are matched against both window class and window title.`,
 }
 
 var patternAddCmd = &cobra.Command{
 	Use:   "add PATTERN",
-	Short: "Add a whitelist pattern",
-	Long:  `Add a regex pattern for auto-whitelisting applications.`,
+	Short: "Add an allowlist pattern",
+	Long:  `Add a regex pattern for auto-allowlisting applications.`,
 	Example: `  # Match all terminal applications
   focusstreamer pattern add ".*[Tt]erminal.*"
 
@@ -34,16 +34,16 @@ var patternAddCmd = &cobra.Command{
 
 var patternRemoveCmd = &cobra.Command{
 	Use:   "remove PATTERN",
-	Short: "Remove a whitelist pattern",
-	Long:  `Remove a regex pattern from auto-whitelisting.`,
+	Short: "Remove an allowlist pattern",
+	Long:  `Remove a regex pattern from auto-allowlisting.`,
 	Args:  cobra.ExactArgs(1),
 	RunE:  runPatternRemove,
 }
 
 var patternListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List whitelist patterns",
-	Long:  `Display all configured whitelist patterns.`,
+	Short: "List allowlist patterns",
+	Long:  `Display all configured allowlist patterns.`,
 	RunE:  runPatternList,
 }
 
@@ -99,11 +99,11 @@ func runPatternList(cmd *cobra.Command, args []string) error {
 
 	cfg := configMgr.Get()
 
-	fmt.Println("Whitelist Patterns:")
-	if len(cfg.WhitelistPatterns) == 0 {
+	fmt.Println("Allowlist Patterns:")
+	if len(cfg.AllowlistPatterns) == 0 {
 		fmt.Println("  (none)")
 	} else {
-		for i, pattern := range cfg.WhitelistPatterns {
+		for i, pattern := range cfg.AllowlistPatterns {
 			fmt.Printf("  %d. %s\n", i+1, pattern)
 		}
 	}

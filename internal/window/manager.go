@@ -251,17 +251,17 @@ func (m *Manager) ListWindows() ([]*config.WindowInfo, error) {
 	return windows, nil
 }
 
-// IsWindowWhitelisted checks if a window is whitelisted
-func (m *Manager) IsWindowWhitelisted(window *config.WindowInfo) bool {
+// IsWindowAllowlisted checks if a window is allowlisted
+func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
 	cfg := m.configMgr.Get()
 
-	// Check exact match in whitelisted apps
-	if cfg.WhitelistedApps[window.Class] {
+	// Check exact match in allowlisted apps
+	if cfg.AllowlistedApps[window.Class] {
 		return true
 	}
 
 	// Check pattern matching
-	for _, pattern := range cfg.WhitelistPatterns {
+	for _, pattern := range cfg.AllowlistPatterns {
 		if matched, _ := regexp.MatchString(pattern, window.Class); matched {
 			return true
 		}
@@ -330,7 +330,7 @@ func (m *Manager) GetApplications() ([]config.Application, error) {
 				Name:        win.Class,
 				WindowClass: win.Class,
 				PID:         win.PID,
-				Whitelisted: m.configMgr.IsWhitelisted(win.Class),
+				Allowlisted: m.configMgr.IsAllowlisted(win.Class),
 			}
 		}
 	}

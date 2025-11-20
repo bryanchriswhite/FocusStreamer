@@ -5,13 +5,13 @@ A Go-based tool that creates a virtual display for Discord screen sharing, dynam
 ## Features
 
 - 🎯 **Focus-Aware Streaming**: Automatically shows only the focused window
-- 🔒 **Application Whitelisting**: Control which applications can appear on the stream
+- 🔒 **Application Allowlisting**: Control which applications can appear on the stream
 - 🎨 **Web UI**: Modern React-based interface for configuration
 - ⚡ **Powerful CLI**: Built with Cobra & Viper for comprehensive command-line control
 - 🔄 **Real-time Updates**: Live window state via WebSocket
-- 📝 **Pattern Matching**: Use regex patterns to auto-whitelist applications
+- 📝 **Pattern Matching**: Use regex patterns to auto-allowlist applications
 - ⚙️ **Flexible Configuration**: YAML-based config with environment variable support
-- 🖥️ **Virtual Display**: Real X11 window that captures and displays whitelisted focused windows
+- 🖥️ **Virtual Display**: Real X11 window that captures and displays allowlisted focused windows
 - 🎬 **Window Capture**: Direct X11 window capture with automatic scaling and composition
 
 ## Use Cases
@@ -84,16 +84,16 @@ make dev
    http://localhost:8080
    ```
 
-3. Configure your whitelist:
+3. Configure your allowlist:
    - View running applications
-   - Add applications to whitelist
+   - Add applications to allowlist
    - Set up pattern matching rules
 
 4. Share in Discord:
    - Start Discord screen share
    - Look for "FocusStreamer - Virtual Display" window
    - Select that window to share
-   - Only whitelisted focused windows will appear in the shared display
+   - Only allowlisted focused windows will appear in the shared display
    - The display updates automatically at 10 FPS when you switch windows
 
 ### Command Line
@@ -104,10 +104,10 @@ FocusStreamer provides a comprehensive CLI for all operations:
 # List all running applications
 focusstreamer list
 
-# Add application to whitelist
-focusstreamer whitelist add firefox
+# Add application to allowlist
+focusstreamer allowlist add firefox
 
-# Add a pattern to auto-whitelist terminals
+# Add a pattern to auto-allowlist terminals
 focusstreamer pattern add ".*Terminal.*"
 
 # View current focused window
@@ -130,11 +130,11 @@ Configuration is stored in `~/.config/focusstreamer/config.yaml`:
 server_port: 8080
 log_level: info
 
-whitelist_patterns:
+allowlist_patterns:
   - ".*Terminal.*"
   - ".*Code.*"
 
-whitelisted_apps:
+allowlisted_apps:
   firefox: true
   chromium: true
   code: true
@@ -175,11 +175,11 @@ focusstreamer config path
 FocusStreamer creates a real X11 window that acts as your virtual display:
 
 1. **Window Detection**: Monitors all X11 windows and tracks focus changes
-2. **Whitelist Filtering**: Only captures windows that match your whitelist or patterns
+2. **Allowlist Filtering**: Only captures windows that match your allowlist or patterns
 3. **Window Capture**: Uses X11's GetImage to capture the focused window's content
 4. **Smart Scaling**: Automatically scales captured content to fit the display (maintains aspect ratio)
-5. **Real-time Updates**: Refreshes at configurable FPS when whitelisted windows are focused
-6. **Black Screen**: Shows black when no whitelisted window is focused (protects privacy)
+5. **Real-time Updates**: Refreshes at configurable FPS when allowlisted windows are focused
+6. **Black Screen**: Shows black when no allowlisted window is focused (protects privacy)
 
 ### Virtual Display Features
 
@@ -190,7 +190,7 @@ FocusStreamer creates a real X11 window that acts as your virtual display:
   - High FPS (25-30): Smoothest, higher CPU usage
 - **Scaling**: Automatic aspect-ratio-preserving scaling
 - **Centering**: Captured windows are centered in the display
-- **Background**: Black background for non-whitelisted windows
+- **Background**: Black background for non-allowlisted windows
 
 ## Documentation
 

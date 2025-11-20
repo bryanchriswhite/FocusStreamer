@@ -1,6 +1,6 @@
 import './ApplicationList.css'
 
-function ApplicationList({ applications, onToggleWhitelist }) {
+function ApplicationList({ applications, onToggleAllowlist }) {
   if (!applications || applications.length === 0) {
     return (
       <div className="empty-state">
@@ -15,17 +15,17 @@ function ApplicationList({ applications, onToggleWhitelist }) {
       {applications.map((app) => (
         <div
           key={app.id}
-          className={`application-item ${app.whitelisted ? 'whitelisted' : ''}`}
+          className={`application-item ${app.allowlisted ? 'allowlisted' : ''}`}
         >
           <div className="app-info">
             <div className="app-name">{app.name}</div>
             <div className="app-class">{app.window_class}</div>
           </div>
           <button
-            className={app.whitelisted ? 'danger' : 'primary'}
-            onClick={() => onToggleWhitelist(app.window_class, app.whitelisted)}
+            className={app.allowlisted ? 'danger' : 'primary'}
+            onClick={() => onToggleAllowlist(app.window_class, app.allowlisted)}
           >
-            {app.whitelisted ? 'Remove' : 'Add'}
+            {app.allowlisted ? 'Remove' : 'Add'}
           </button>
         </div>
       ))}
