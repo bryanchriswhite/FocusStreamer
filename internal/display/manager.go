@@ -21,6 +21,7 @@ type Manager struct {
 	displayWindow xproto.Window
 	width         int
 	height        int
+	fps           int
 	running       bool
 	mu            sync.RWMutex
 	stopChan      chan struct{}
@@ -37,11 +38,18 @@ func NewManager(cfg *config.DisplayConfig) (*Manager, error) {
 	setup := xproto.Setup(conn)
 	screen := setup.DefaultScreen(conn)
 
+	// Default FPS if not set or invalid
+	fps := cfg.FPS
+	if fps <= 0 {
+		fps = 10
+	}
+
 	m := &Manager{
 		conn:     conn,
 		screen:   screen,
 		width:    cfg.Width,
 		height:   cfg.Height,
+		fps:      fps,
 		stopChan: make(chan struct{}),
 	}
 
@@ -399,8 +407,12 @@ func (m *Manager) GetWindowID() uint32 {
 
 // UpdateLoop continuously updates the display based on focused window
 func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isWhitelisted func(*config.WindowInfo) bool) {
-	ticker := time.NewTicker(100 * time.Millisecond) // Update at 10 FPS
+	// Calculate update interval from FPS (e.g., 10 FPS = 100ms, 30 FPS = 33ms)
+	updateInterval := time.Duration(1000/m.fps) * time.Millisecond
+	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
+
+	log.Printf("Display update loop started at %d FPS (%v interval)", m.fps, updateInterval)
 
 	var lastWindowID uint32
 

@@ -143,6 +143,7 @@ virtual_display:
   width: 1920
   height: 1080
   refresh_hz: 60
+  fps: 10
   enabled: true
 ```
 
@@ -154,6 +155,13 @@ focusstreamer config show
 
 # Change server port
 focusstreamer config set server_port 9090
+
+# Adjust display FPS (1-60)
+focusstreamer config set virtual_display.fps 30
+
+# Change display resolution
+focusstreamer config set virtual_display.width 2560
+focusstreamer config set virtual_display.height 1440
 
 # Get specific value
 focusstreamer config get log_level
@@ -170,13 +178,16 @@ FocusStreamer creates a real X11 window that acts as your virtual display:
 2. **Whitelist Filtering**: Only captures windows that match your whitelist or patterns
 3. **Window Capture**: Uses X11's GetImage to capture the focused window's content
 4. **Smart Scaling**: Automatically scales captured content to fit the display (maintains aspect ratio)
-5. **Real-time Updates**: Refreshes at 10 FPS when whitelisted windows are focused
+5. **Real-time Updates**: Refreshes at configurable FPS when whitelisted windows are focused
 6. **Black Screen**: Shows black when no whitelisted window is focused (protects privacy)
 
 ### Virtual Display Features
 
 - **Resolution**: Configurable (default: 1920x1080)
-- **Update Rate**: 10 FPS (100ms intervals)
+- **Update Rate**: Configurable FPS (default: 10 FPS / 100ms intervals)
+  - Low FPS (5-10): Better CPU usage, suitable for most use cases
+  - Medium FPS (15-20): Smoother for dynamic content
+  - High FPS (25-30): Smoothest, higher CPU usage
 - **Scaling**: Automatic aspect-ratio-preserving scaling
 - **Centering**: Captured windows are centered in the display
 - **Background**: Black background for non-whitelisted windows

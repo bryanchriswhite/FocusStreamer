@@ -49,6 +49,7 @@ type DisplayConfig struct {
 	Width     int  `json:"width" mapstructure:"width"`
 	Height    int  `json:"height" mapstructure:"height"`
 	RefreshHz int  `json:"refresh_hz" mapstructure:"refresh_hz"`
+	FPS       int  `json:"fps" mapstructure:"fps"`
 	Enabled   bool `json:"enabled" mapstructure:"enabled"`
 }
 
@@ -117,6 +118,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("virtual_display.width", 1920)
 	v.SetDefault("virtual_display.height", 1080)
 	v.SetDefault("virtual_display.refresh_hz", 60)
+	v.SetDefault("virtual_display.fps", 10)
 	v.SetDefault("virtual_display.enabled", true)
 }
 
@@ -139,6 +141,7 @@ func (m *Manager) Get() *Config {
 				Width:     1920,
 				Height:    1080,
 				RefreshHz: 60,
+				FPS:       10,
 				Enabled:   true,
 			},
 		}
