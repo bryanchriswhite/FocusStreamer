@@ -6,25 +6,28 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/xgb"
+	"github.com/BurntSushi/xgb/composite"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 )
 
 // Manager handles X11 window detection and monitoring
 type Manager struct {
-	conn          *xgb.Conn
-	root          xproto.Window
-	screen        *xproto.ScreenInfo
-	configMgr     *config.Manager
-	currentWindow *config.WindowInfo
-	mu            sync.RWMutex
-	listeners     []chan *config.WindowInfo
-	stopChan      chan struct{}
+	conn             *xgb.Conn
+	root             xproto.Window
+	screen           *xproto.ScreenInfo
+	configMgr        *config.Manager
+	currentWindow    *config.WindowInfo
+	mu               sync.RWMutex
+	listeners        []chan *config.WindowInfo
+	stopChan         chan struct{}
+	compositeEnabled bool
 }
 
 // NewManager creates a new window manager
@@ -38,13 +41,24 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 	screen := setup.DefaultScreen(conn)
 	root := screen.Root
 
+	// Initialize composite extension
+	compositeEnabled := false
+	if err := composite.Init(conn); err != nil {
+		log.Printf("Warning: Composite extension not available: %v", err)
+		log.Printf("Window screenshots may fail for obscured or off-screen windows")
+	} else {
+		compositeEnabled = true
+		log.Printf("Composite extension initialized successfully")
+	}
+
 	m := &Manager{
-		conn:      conn,
-		root:      root,
-		screen:    screen,
-		configMgr: configMgr,
-		listeners: make([]chan *config.WindowInfo, 0),
-		stopChan:  make(chan struct{}),
+		conn:             conn,
+		root:             root,
+		screen:           screen,
+		configMgr:        configMgr,
+		listeners:        make([]chan *config.WindowInfo, 0),
+		stopChan:         make(chan struct{}),
+		compositeEnabled: compositeEnabled,
 	}
 
 	return m, nil
@@ -358,11 +372,40 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 
 // captureWindow captures a window's content as an image
 func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply) (*image.RGBA, error) {
+	var drawable xproto.Drawable
+
+	// Use Composite extension if available for more reliable capture
+	if m.compositeEnabled {
+		// Create a pixmap ID and associate it with the window's off-screen buffer
+		// This works even if the window is obscured or off-screen
+		pixmap, err := xproto.NewPixmapId(m.conn)
+		if err != nil {
+			log.Printf("Warning: Failed to generate pixmap ID: %v", err)
+			log.Printf("Falling back to direct window capture")
+			drawable = xproto.Drawable(win)
+		} else {
+			// Associate the pixmap with the window's off-screen buffer
+			err = composite.NameWindowPixmapChecked(m.conn, win, pixmap).Check()
+			if err != nil {
+				log.Printf("Warning: Failed to name window pixmap via Composite: %v", err)
+				log.Printf("Falling back to direct window capture")
+				drawable = xproto.Drawable(win)
+			} else {
+				drawable = xproto.Drawable(pixmap)
+				log.Printf("Using Composite pixmap for window capture")
+				// Free pixmap when done
+				defer xproto.FreePixmap(m.conn, pixmap)
+			}
+		}
+	} else {
+		drawable = xproto.Drawable(win)
+	}
+
 	// Get window image data
 	reply, err := xproto.GetImage(
 		m.conn,
 		xproto.ImageFormatZPixmap,
-		xproto.Drawable(win),
+		drawable,
 		0, 0,
 		geom.Width, geom.Height,
 		0xffffffff, // plane mask
