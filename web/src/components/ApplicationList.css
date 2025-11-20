@@ -12,6 +12,7 @@
   border: 2px solid #e0e0e0;
   border-radius: 6px;
   transition: all 0.2s;
+  cursor: pointer;
 }
 
 .application-item:hover {
@@ -24,19 +25,58 @@
   background-color: #f1f8f4;
 }
 
+.application-item.selected {
+  border-color: #2196f3;
+  background-color: #e3f2fd;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
+}
+
 .app-info {
   flex: 1;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .app-name {
   font-weight: 600;
   color: #333;
-  margin-bottom: 0.25rem;
+  font-size: 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  background-color: #4caf50;
+  color: white;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.app-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.app-class,
+.app-pid {
+  font-size: 0.875rem;
+  color: #666;
+}
+
+.app-class strong,
+.app-pid strong {
+  color: #444;
+  font-weight: 500;
 }
 
 .app-class {
-  font-size: 0.875rem;
-  color: #666;
   font-family: monospace;
 }
 

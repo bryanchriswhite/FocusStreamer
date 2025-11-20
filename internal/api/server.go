@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
@@ -68,9 +70,42 @@ func (s *Server) setupRoutes() {
 	// Health check
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
 
-	// Serve static files (will be the React app)
-	// For now, serve a simple index page
-	s.router.PathPrefix("/").HandlerFunc(s.handleIndex)
+	// Serve static files (React app from web/dist)
+	s.router.PathPrefix("/").Handler(s.createStaticHandler())
+}
+
+// createStaticHandler creates a handler for serving static files
+func (s *Server) createStaticHandler() http.Handler {
+	// Get the web/dist directory path
+	webDistPath := filepath.Join("web", "dist")
+
+	// Check if the directory exists
+	if _, err := os.Stat(webDistPath); os.IsNotExist(err) {
+		log.Printf("Warning: web/dist directory not found at %s, serving fallback HTML", webDistPath)
+		return http.HandlerFunc(s.handleFallbackIndex)
+	}
+
+	// Create file server for the dist directory
+	fileServer := http.FileServer(http.Dir(webDistPath))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't serve static files for API routes
+		if strings.HasPrefix(r.URL.Path, "/api") {
+			http.NotFound(w, r)
+			return
+		}
+
+		// For root or any non-asset path, serve index.html (for client-side routing)
+		path := filepath.Join(webDistPath, r.URL.Path)
+		if _, err := os.Stat(path); os.IsNotExist(err) && !strings.HasPrefix(r.URL.Path, "/assets") {
+			// Serve index.html for client-side routing
+			http.ServeFile(w, r, filepath.Join(webDistPath, "index.html"))
+			return
+		}
+
+		// Serve the requested file
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 // Start starts the HTTP server
@@ -285,9 +320,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	// For now, serve a simple HTML page
-	// This will be replaced with the React app build
+func (s *Server) handleFallbackIndex(w http.ResponseWriter, r *http.Request) {
+	// Fallback HTML page when React build is not available
 	html := `<!DOCTYPE html>
 <html lang="en">
 <head>

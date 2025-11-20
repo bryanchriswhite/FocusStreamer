@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import ApplicationList from './components/ApplicationList'
+import ApplicationPreview from './components/ApplicationPreview'
 import CurrentWindow from './components/CurrentWindow'
 import PatternManager from './components/PatternManager'
 
@@ -8,6 +9,7 @@ function App() {
   const [applications, setApplications] = useState([])
   const [currentWindow, setCurrentWindow] = useState(null)
   const [config, setConfig] = useState(null)
+  const [selectedApp, setSelectedApp] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -147,13 +149,20 @@ function App() {
           </section>
 
           <section className="section">
+            <h2>Selected Application</h2>
+            <ApplicationPreview application={selectedApp} />
+          </section>
+
+          <section className="section">
             <h2>Applications</h2>
             <p className="section-description">
-              Select which applications can appear on your virtual display when they're focused.
+              Click an application to view details. Add to allowlist to show it on your virtual display when focused.
             </p>
             <ApplicationList
               applications={applications}
               onToggleAllowlist={toggleAllowlist}
+              selectedApp={selectedApp}
+              onSelectApp={setSelectedApp}
             />
           </section>
 
