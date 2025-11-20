@@ -19,7 +19,18 @@ function App() {
       const response = await fetch('/api/applications')
       if (!response.ok) throw new Error('Failed to fetch applications')
       const data = await response.json()
-      setApplications(data || [])
+
+      // Sort applications for stable ordering
+      const sorted = (data || []).sort((a, b) => {
+        // First by allowlisted status (allowlisted first)
+        if (a.allowlisted !== b.allowlisted) {
+          return a.allowlisted ? -1 : 1
+        }
+        // Then alphabetically by name
+        return a.name.localeCompare(b.name)
+      })
+
+      setApplications(sorted)
     } catch (err) {
       setError(err.message)
     }
