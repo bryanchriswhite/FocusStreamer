@@ -7,8 +7,10 @@ A Go-based tool that creates a virtual display for Discord screen sharing, dynam
 - 🎯 **Focus-Aware Streaming**: Automatically shows only the focused window
 - 🔒 **Application Whitelisting**: Control which applications can appear on the stream
 - 🎨 **Web UI**: Modern React-based interface for configuration
+- ⚡ **Powerful CLI**: Built with Cobra & Viper for comprehensive command-line control
 - 🔄 **Real-time Updates**: Live window state via WebSocket
 - 📝 **Pattern Matching**: Use regex patterns to auto-whitelist applications
+- ⚙️ **Flexible Configuration**: YAML-based config with environment variable support
 - 🖥️ **Virtual Display**: Dedicated display area for screen sharing
 
 ## Use Cases
@@ -45,8 +47,8 @@ cd FocusStreamer
 # Build the application
 make build
 
-# Run the application
-./focusstreamer
+# Start the server
+./build/focusstreamer serve
 ```
 
 ### Development
@@ -64,9 +66,13 @@ make dev
 
 ## Usage
 
-1. Start FocusStreamer:
+### Web UI
+
+1. Start the server:
    ```bash
-   ./focusstreamer
+   ./build/focusstreamer serve
+   # Or with custom port
+   ./build/focusstreamer serve --port 9090
    ```
 
 2. Open the web UI:
@@ -84,32 +90,78 @@ make dev
    - Select the FocusStreamer window
    - Only whitelisted focused windows will appear
 
-## Configuration
+### Command Line
 
-Configuration is stored in `~/.config/focusstreamer/config.json`:
+FocusStreamer provides a comprehensive CLI for all operations:
 
-```json
-{
-  "whitelist_patterns": [
-    ".*Terminal.*",
-    ".*Code.*"
-  ],
-  "whitelisted_apps": {
-    "firefox": true,
-    "chromium": true
-  },
-  "virtual_display": {
-    "width": 1920,
-    "height": 1080,
-    "refresh_hz": 60,
-    "enabled": true
-  }
-}
+```bash
+# List all running applications
+focusstreamer list
+
+# Add application to whitelist
+focusstreamer whitelist add firefox
+
+# Add a pattern to auto-whitelist terminals
+focusstreamer pattern add ".*Terminal.*"
+
+# View current focused window
+focusstreamer list --current
+
+# Change server port
+focusstreamer config set server_port 9090
+
+# View all configuration
+focusstreamer config show
 ```
 
-## API Reference
+See [CLI.md](CLI.md) for complete CLI documentation.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed API documentation.
+## Configuration
+
+Configuration is stored in `~/.config/focusstreamer/config.yaml`:
+
+```yaml
+server_port: 8080
+log_level: info
+
+whitelist_patterns:
+  - ".*Terminal.*"
+  - ".*Code.*"
+
+whitelisted_apps:
+  firefox: true
+  chromium: true
+  code: true
+
+virtual_display:
+  width: 1920
+  height: 1080
+  refresh_hz: 60
+  enabled: true
+```
+
+### Managing Configuration
+
+```bash
+# View current configuration
+focusstreamer config show
+
+# Change server port
+focusstreamer config set server_port 9090
+
+# Get specific value
+focusstreamer config get log_level
+
+# Show config file location
+focusstreamer config path
+```
+
+## Documentation
+
+- **[CLI.md](CLI.md)** - Complete CLI command reference
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Architecture and API documentation
+- **[TESTING.md](TESTING.md)** - Testing guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution guidelines
 
 ## Architecture
 

@@ -29,6 +29,9 @@ install-deps: ## Install Go dependencies
 	$(GOGET) github.com/BurntSushi/xgb
 	$(GOGET) github.com/gorilla/mux
 	$(GOGET) github.com/gorilla/websocket
+	$(GOGET) github.com/spf13/cobra@latest
+	$(GOGET) github.com/spf13/viper@latest
+	$(GOGET) gopkg.in/yaml.v3
 	$(GOMOD) tidy
 
 build: build-backend ## Build the entire application (backend only for now)
@@ -37,7 +40,7 @@ build: build-backend ## Build the entire application (backend only for now)
 build-backend: ## Build the Go backend
 	@echo "Building backend..."
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/server
+	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/focusstreamer
 	@echo "Backend built: $(BUILD_DIR)/$(BINARY_NAME)"
 
 build-frontend: ## Build the React frontend (when implemented)
@@ -54,7 +57,7 @@ dev: ## Run both backend and frontend in development mode
 
 dev-backend: ## Run backend in development mode
 	@echo "Starting backend server..."
-	$(GOCMD) run ./cmd/server/main.go
+	$(GOCMD) run ./cmd/focusstreamer serve
 
 dev-frontend: ## Run frontend in development mode (when implemented)
 	@if [ -d "$(WEB_DIR)" ]; then \
@@ -77,7 +80,7 @@ clean: ## Clean build artifacts
 
 run: build ## Build and run the application
 	@echo "Running FocusStreamer..."
-	./$(BUILD_DIR)/$(BINARY_NAME)
+	./$(BUILD_DIR)/$(BINARY_NAME) serve
 
 .PHONY: docker-build docker-run
 docker-build: ## Build Docker image (future feature)
