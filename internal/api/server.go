@@ -57,6 +57,7 @@ func (s *Server) setupRoutes() {
 	// Window state
 	api.HandleFunc("/window/current", s.handleGetCurrentWindow).Methods("GET")
 	api.HandleFunc("/window/stream", s.handleWindowStream)
+	api.HandleFunc("/window/{id}/screenshot", s.handleGetWindowScreenshot).Methods("GET")
 
 	// Configuration
 	api.HandleFunc("/config", s.handleGetConfig).Methods("GET")
@@ -251,6 +252,42 @@ func (s *Server) handleWindowStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (s *Server) handleGetWindowScreenshot(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	windowClass := vars["id"]
+
+	log.Printf("Screenshot requested for window class: %s", windowClass)
+
+	// Find window by class
+	window, err := s.windowMgr.FindWindowByClass(windowClass)
+	if err != nil {
+		log.Printf("Window not found: %v", err)
+		http.Error(w, "Window not found", http.StatusNotFound)
+		return
+	}
+
+	// Capture screenshot
+	if s.displayMgr == nil {
+		log.Printf("Display manager not available")
+		http.Error(w, "Screenshot functionality requires display manager", http.StatusServiceUnavailable)
+		return
+	}
+
+	pngData, err := s.displayMgr.CaptureWindowScreenshot(window.ID)
+	if err != nil {
+		log.Printf("Failed to capture screenshot: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to capture screenshot: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Successfully captured screenshot for %s (%d bytes)", windowClass, len(pngData))
+
+	// Return PNG image
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Write(pngData)
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {

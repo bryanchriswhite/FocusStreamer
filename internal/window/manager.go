@@ -310,6 +310,22 @@ func (m *Manager) notifyListeners(window *config.WindowInfo) {
 	}
 }
 
+// FindWindowByClass finds the first window with the given class
+func (m *Manager) FindWindowByClass(windowClass string) (*config.WindowInfo, error) {
+	windows, err := m.ListWindows()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, win := range windows {
+		if win.Class == windowClass {
+			return win, nil
+		}
+	}
+
+	return nil, fmt.Errorf("window not found: %s", windowClass)
+}
+
 // GetApplications returns a list of unique applications
 func (m *Manager) GetApplications() ([]config.Application, error) {
 	windows, err := m.ListWindows()

@@ -1,10 +1,12 @@
 package display
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"image/png"
 	"log"
 	"sync"
 	"time"
@@ -187,6 +189,29 @@ func (m *Manager) ClearDisplay() error {
 	draw.Draw(img, img.Bounds(), &image.Uniform{image.Black}, image.Point{}, draw.Src)
 
 	return m.renderImage(img)
+}
+
+// CaptureWindowScreenshot captures a screenshot of a window by ID and returns PNG data
+func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
+	// Get window geometry
+	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowID)).Reply()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get window geometry: %w", err)
+	}
+
+	// Capture window image
+	img, err := m.captureWindow(xproto.Window(windowID), geom)
+	if err != nil {
+		return nil, fmt.Errorf("failed to capture window: %w", err)
+	}
+
+	// Encode as PNG
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("failed to encode PNG: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // captureWindow captures a window's content as an image
