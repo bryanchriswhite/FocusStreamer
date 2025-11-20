@@ -158,7 +158,19 @@ func (m *Manager) Get() *Config {
 
 // Save saves the current configuration to disk
 func (m *Manager) Save() error {
-	return m.v.WriteConfigAs(m.configPath)
+	log.Printf("Saving config to: %s", m.configPath)
+
+	// Debug: log what we're trying to save
+	allowlistedApps := m.v.GetStringMap("allowlisted_apps")
+	log.Printf("Config contains %d allowlisted apps: %v", len(allowlistedApps), allowlistedApps)
+
+	if err := m.v.WriteConfigAs(m.configPath); err != nil {
+		log.Printf("Error saving config: %v", err)
+		return err
+	}
+
+	log.Printf("Config saved successfully")
+	return nil
 }
 
 // Update updates the entire configuration
@@ -173,9 +185,13 @@ func (m *Manager) Update(cfg *Config) error {
 
 // AddAllowlistedApp adds an application to the allowlist
 func (m *Manager) AddAllowlistedApp(appClass string) error {
+	log.Printf("AddAllowlistedApp called for: %s", appClass)
+
 	// Get existing apps as a proper map[string]bool
 	apps := make(map[string]bool)
 	existingApps := m.v.GetStringMap("allowlisted_apps")
+	log.Printf("Existing allowlisted apps before add: %v", existingApps)
+
 	for k, v := range existingApps {
 		if b, ok := v.(bool); ok {
 			apps[k] = b
@@ -186,13 +202,19 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 
 	// Add new app
 	apps[appClass] = true
+	log.Printf("Setting allowlisted_apps to: %v", apps)
 	m.v.Set("allowlisted_apps", apps)
 
+	// Verify the set worked
+	verification := m.v.GetStringMap("allowlisted_apps")
+	log.Printf("Verification after set: %v", verification)
+
 	if err := m.Save(); err != nil {
+		log.Printf("Error saving config after adding '%s': %v", appClass, err)
 		return err
 	}
 
-	log.Printf("Added '%s' to allowlist. Total allowlisted: %d", appClass, len(apps))
+	log.Printf("Successfully added '%s' to allowlist. Total allowlisted: %d", appClass, len(apps))
 	return nil
 }
 
@@ -225,6 +247,12 @@ func (m *Manager) RemoveAllowlistedApp(appClass string) error {
 func (m *Manager) IsAllowlisted(appClass string) bool {
 	apps := m.v.GetStringMap("allowlisted_apps")
 	val, exists := apps[appClass]
+
+	// Debug logging (only for first few checks to avoid spam)
+	if len(apps) > 0 {
+		log.Printf("IsAllowlisted check for '%s': exists=%v, total_apps=%d", appClass, exists, len(apps))
+	}
+
 	if !exists {
 		return false
 	}
