@@ -25,8 +25,6 @@ function ApplicationPreview({ application }) {
           const blob = await response.blob()
           const url = URL.createObjectURL(blob)
           setScreenshot(url)
-        } else if (response.status === 503) {
-          setError('Screenshot requires virtual display to be enabled')
         } else if (response.status === 404) {
           setError('Window not currently visible')
         } else {

@@ -268,14 +268,8 @@ func (s *Server) handleGetWindowScreenshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Capture screenshot
-	if s.displayMgr == nil {
-		log.Printf("Display manager not available")
-		http.Error(w, "Screenshot functionality requires display manager", http.StatusServiceUnavailable)
-		return
-	}
-
-	pngData, err := s.displayMgr.CaptureWindowScreenshot(window.ID)
+	// Capture screenshot using window manager
+	pngData, err := s.windowMgr.CaptureWindowScreenshot(window.ID)
 	if err != nil {
 		log.Printf("Failed to capture screenshot: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to capture screenshot: %v", err), http.StatusInternalServerError)

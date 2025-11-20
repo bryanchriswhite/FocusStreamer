@@ -1,7 +1,11 @@
 package window
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"regexp"
 	"sync"
 	"time"
@@ -15,6 +19,7 @@ import (
 type Manager struct {
 	conn          *xgb.Conn
 	root          xproto.Window
+	screen        *xproto.ScreenInfo
 	configMgr     *config.Manager
 	currentWindow *config.WindowInfo
 	mu            sync.RWMutex
@@ -30,11 +35,13 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 	}
 
 	setup := xproto.Setup(conn)
-	root := setup.DefaultScreen(conn).Root
+	screen := setup.DefaultScreen(conn)
+	root := screen.Root
 
 	m := &Manager{
 		conn:      conn,
 		root:      root,
+		screen:    screen,
 		configMgr: configMgr,
 		listeners: make([]chan *config.WindowInfo, 0),
 		stopChan:  make(chan struct{}),
@@ -324,6 +331,72 @@ func (m *Manager) FindWindowByClass(windowClass string) (*config.WindowInfo, err
 	}
 
 	return nil, fmt.Errorf("window not found: %s", windowClass)
+}
+
+// CaptureWindowScreenshot captures a screenshot of a window by ID and returns PNG data
+func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
+	// Get window geometry
+	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowID)).Reply()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get window geometry: %w", err)
+	}
+
+	// Capture window image
+	img, err := m.captureWindow(xproto.Window(windowID), geom)
+	if err != nil {
+		return nil, fmt.Errorf("failed to capture window: %w", err)
+	}
+
+	// Encode as PNG
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("failed to encode PNG: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// captureWindow captures a window's content as an image
+func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply) (*image.RGBA, error) {
+	// Get window image data
+	reply, err := xproto.GetImage(
+		m.conn,
+		xproto.ImageFormatZPixmap,
+		xproto.Drawable(win),
+		0, 0,
+		geom.Width, geom.Height,
+		0xffffffff, // plane mask
+	).Reply()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image: %w", err)
+	}
+
+	// Convert to RGBA image
+	img := image.NewRGBA(image.Rect(0, 0, int(geom.Width), int(geom.Height)))
+
+	// Parse image data (assuming 32-bit BGRA format)
+	data := reply.Data
+	depth := int(m.screen.RootDepth)
+
+	if depth == 24 || depth == 32 {
+		for y := 0; y < int(geom.Height); y++ {
+			for x := 0; x < int(geom.Width); x++ {
+				i := (y*int(geom.Width) + x) * 4
+				if i+3 < len(data) {
+					// BGRA to RGBA
+					img.Set(x, y, color.RGBA{
+						R: data[i+2],
+						G: data[i+1],
+						B: data[i],
+						A: 255,
+					})
+				}
+			}
+		}
+	}
+
+	return img, nil
 }
 
 // GetApplications returns a list of unique applications
