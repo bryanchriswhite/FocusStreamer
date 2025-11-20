@@ -34,7 +34,7 @@ install-deps: ## Install Go dependencies
 	$(GOGET) gopkg.in/yaml.v3
 	$(GOMOD) tidy
 
-build: build-backend ## Build the entire application (backend only for now)
+build: build-frontend build-backend ## Build the entire application (frontend + backend)
 	@echo "Build complete!"
 
 build-backend: ## Build the Go backend
@@ -43,13 +43,12 @@ build-backend: ## Build the Go backend
 	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/focusstreamer
 	@echo "Backend built: $(BUILD_DIR)/$(BINARY_NAME)"
 
-build-frontend: ## Build the React frontend (when implemented)
-	@if [ -d "$(WEB_DIR)" ]; then \
-		echo "Building frontend..."; \
-		cd $(WEB_DIR) && $(NPM) run build; \
-	else \
-		echo "Frontend not yet implemented"; \
-	fi
+build-frontend: ## Build the React frontend
+	@echo "Installing frontend dependencies..."
+	@cd $(WEB_DIR) && $(NPM) install
+	@echo "Building frontend..."
+	@cd $(WEB_DIR) && $(NPM) run build
+	@echo "Frontend built: $(WEB_DIR)/dist"
 
 dev: ## Run both backend and frontend in development mode
 	@echo "Starting development servers..."
@@ -59,14 +58,9 @@ dev-backend: ## Run backend in development mode
 	@echo "Starting backend server..."
 	$(GOCMD) run ./cmd/focusstreamer serve
 
-dev-frontend: ## Run frontend in development mode (when implemented)
-	@if [ -d "$(WEB_DIR)" ]; then \
-		echo "Starting frontend dev server..."; \
-		cd $(WEB_DIR) && $(NPM) run dev; \
-	else \
-		echo "Frontend not yet implemented"; \
-		echo "You can still access the API at http://localhost:8080/api"; \
-	fi
+dev-frontend: ## Run frontend in development mode
+	@echo "Starting frontend dev server..."
+	@cd $(WEB_DIR) && $(NPM) install && $(NPM) run dev
 
 test: ## Run tests
 	@echo "Running tests..."
@@ -82,9 +76,19 @@ run: build ## Build and run the application
 	@echo "Running FocusStreamer..."
 	./$(BUILD_DIR)/$(BINARY_NAME) serve
 
-.PHONY: docker-build docker-run
-docker-build: ## Build Docker image (future feature)
-	@echo "Docker support coming soon..."
+.PHONY: docker-build docker-run docker-stop docker-logs
+docker-build: ## Build Docker image
+	@echo "Building Docker image..."
+	docker build -t focusstreamer:latest .
 
-docker-run: ## Run in Docker (future feature)
-	@echo "Docker support coming soon..."
+docker-run: ## Run Docker container
+	@echo "Starting Docker container..."
+	docker-compose up -d
+
+docker-stop: ## Stop Docker container
+	@echo "Stopping Docker container..."
+	docker-compose down
+
+docker-logs: ## Show Docker container logs
+	@echo "Showing logs..."
+	docker-compose logs -f
