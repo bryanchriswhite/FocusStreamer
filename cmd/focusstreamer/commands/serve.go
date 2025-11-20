@@ -9,6 +9,7 @@ import (
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/api"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
+	"github.com/bryanchriswhite/FocusStreamer/internal/display"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -35,8 +36,11 @@ and viewing the currently focused window.`,
 	RunE: runServe,
 }
 
+var noDisplay bool
+
 func init() {
 	rootCmd.AddCommand(serveCmd)
+	serveCmd.Flags().BoolVar(&noDisplay, "no-display", false, "disable virtual display window")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -84,9 +88,35 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start window manager: %w", err)
 	}
 
+	// Initialize display manager (if enabled)
+	var displayMgr *display.Manager
+	if cfg.VirtualDisplay.Enabled && !noDisplay {
+		log.Println("Initializing virtual display...")
+		displayMgr, err = display.NewManager(&cfg.VirtualDisplay)
+		if err != nil {
+			return fmt.Errorf("failed to initialize display manager: %w", err)
+		}
+		defer displayMgr.Stop()
+
+		// Start the display window
+		if err := displayMgr.Start(); err != nil {
+			return fmt.Errorf("failed to start display: %w", err)
+		}
+
+		// Start display update loop
+		go displayMgr.UpdateLoop(
+			windowMgr.GetCurrentWindow,
+			windowMgr.IsWindowWhitelisted,
+		)
+
+		log.Printf("Virtual display created (Window ID: %d)", displayMgr.GetWindowID())
+	} else {
+		log.Println("Virtual display disabled")
+	}
+
 	// Initialize API server
 	log.Println("Initializing HTTP server...")
-	server := api.NewServer(windowMgr, configMgr)
+	server := api.NewServer(windowMgr, configMgr, displayMgr)
 
 	// Start server in a goroutine
 	go func() {
@@ -105,6 +135,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	log.Println("✅ FocusStreamer is running!")
 	log.Printf("   - Web UI: http://localhost:%d", cfg.ServerPort)
 	log.Printf("   - API: http://localhost:%d/api", cfg.ServerPort)
+	if displayMgr != nil && displayMgr.IsRunning() {
+		log.Printf("   - Virtual Display: Window ID %d (share this in Discord!)", displayMgr.GetWindowID())
+	}
 	log.Println("   - Press Ctrl+C to stop")
 	fmt.Println()
 

@@ -11,7 +11,8 @@ A Go-based tool that creates a virtual display for Discord screen sharing, dynam
 - 🔄 **Real-time Updates**: Live window state via WebSocket
 - 📝 **Pattern Matching**: Use regex patterns to auto-whitelist applications
 - ⚙️ **Flexible Configuration**: YAML-based config with environment variable support
-- 🖥️ **Virtual Display**: Dedicated display area for screen sharing
+- 🖥️ **Virtual Display**: Real X11 window that captures and displays whitelisted focused windows
+- 🎬 **Window Capture**: Direct X11 window capture with automatic scaling and composition
 
 ## Use Cases
 
@@ -47,8 +48,11 @@ cd FocusStreamer
 # Build the application
 make build
 
-# Start the server
+# Start the server (creates virtual display window)
 ./build/focusstreamer serve
+
+# Or disable virtual display (API/web UI only)
+./build/focusstreamer serve --no-display
 ```
 
 ### Development
@@ -87,8 +91,10 @@ make dev
 
 4. Share in Discord:
    - Start Discord screen share
-   - Select the FocusStreamer window
-   - Only whitelisted focused windows will appear
+   - Look for "FocusStreamer - Virtual Display" window
+   - Select that window to share
+   - Only whitelisted focused windows will appear in the shared display
+   - The display updates automatically at 10 FPS when you switch windows
 
 ### Command Line
 
@@ -155,6 +161,25 @@ focusstreamer config get log_level
 # Show config file location
 focusstreamer config path
 ```
+
+## How It Works
+
+FocusStreamer creates a real X11 window that acts as your virtual display:
+
+1. **Window Detection**: Monitors all X11 windows and tracks focus changes
+2. **Whitelist Filtering**: Only captures windows that match your whitelist or patterns
+3. **Window Capture**: Uses X11's GetImage to capture the focused window's content
+4. **Smart Scaling**: Automatically scales captured content to fit the display (maintains aspect ratio)
+5. **Real-time Updates**: Refreshes at 10 FPS when whitelisted windows are focused
+6. **Black Screen**: Shows black when no whitelisted window is focused (protects privacy)
+
+### Virtual Display Features
+
+- **Resolution**: Configurable (default: 1920x1080)
+- **Update Rate**: 10 FPS (100ms intervals)
+- **Scaling**: Automatic aspect-ratio-preserving scaling
+- **Centering**: Captured windows are centered in the display
+- **Background**: Black background for non-whitelisted windows
 
 ## Documentation
 

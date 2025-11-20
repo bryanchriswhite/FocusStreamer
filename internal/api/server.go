@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
+	"github.com/bryanchriswhite/FocusStreamer/internal/display"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -15,18 +16,20 @@ import (
 
 // Server represents the HTTP API server
 type Server struct {
-	router    *mux.Router
-	windowMgr *window.Manager
-	configMgr *config.Manager
-	upgrader  websocket.Upgrader
+	router     *mux.Router
+	windowMgr  *window.Manager
+	configMgr  *config.Manager
+	displayMgr *display.Manager
+	upgrader   websocket.Upgrader
 }
 
 // NewServer creates a new API server
-func NewServer(windowMgr *window.Manager, configMgr *config.Manager) *Server {
+func NewServer(windowMgr *window.Manager, configMgr *config.Manager, displayMgr *display.Manager) *Server {
 	s := &Server{
-		router:    mux.NewRouter(),
-		windowMgr: windowMgr,
-		configMgr: configMgr,
+		router:     mux.NewRouter(),
+		windowMgr:  windowMgr,
+		configMgr:  configMgr,
+		displayMgr: displayMgr,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for development
@@ -58,6 +61,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/config", s.handleUpdateConfig).Methods("PUT")
 	api.HandleFunc("/config/patterns", s.handleAddPattern).Methods("POST")
 	api.HandleFunc("/config/patterns", s.handleRemovePattern).Methods("DELETE")
+
+	// Display management
+	api.HandleFunc("/display/status", s.handleDisplayStatus).Methods("GET")
 
 	// Health check
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
@@ -252,6 +258,23 @@ func (s *Server) handleRemovePattern(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleDisplayStatus(w http.ResponseWriter, r *http.Request) {
+	status := map[string]interface{}{
+		"enabled": false,
+		"running": false,
+		"window_id": 0,
+	}
+
+	if s.displayMgr != nil {
+		status["enabled"] = true
+		status["running"] = s.displayMgr.IsRunning()
+		status["window_id"] = s.displayMgr.GetWindowID()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
