@@ -411,27 +411,43 @@ func (m *Manager) findCapturableChild(parent xproto.Window) (xproto.Window, erro
 		return 0, fmt.Errorf("failed to query tree: %w", err)
 	}
 
+	log.Printf("Window %d has %d children", parent, len(tree.Children))
+
 	// Search through children for a capturable window
 	for _, child := range tree.Children {
 		attrs, err := xproto.GetWindowAttributes(m.conn, child).Reply()
 		if err != nil {
+			log.Printf("  Child %d: failed to get attributes: %v", child, err)
 			continue
 		}
 
+		geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(child)).Reply()
+		if err != nil {
+			log.Printf("  Child %d: failed to get geometry: %v", child, err)
+			continue
+		}
+
+		log.Printf("  Child %d: class=%d, mapState=%d, size=%dx%d",
+			child, attrs.Class, attrs.MapState, geom.Width, geom.Height)
+
 		// Check if this child is capturable
 		if attrs.Class == xproto.WindowClassInputOutput && attrs.MapState == xproto.MapStateViewable {
-			// Verify it has some size
-			geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(child)).Reply()
-			if err != nil {
-				continue
-			}
-
 			// Must have reasonable dimensions
 			if geom.Width > 10 && geom.Height > 10 {
-				log.Printf("Found capturable child: %d (class=%d, mapState=%d, size=%dx%d)",
-					child, attrs.Class, attrs.MapState, geom.Width, geom.Height)
+				log.Printf("  -> Found capturable child: %d", child)
 				return child, nil
+			} else {
+				log.Printf("  -> Too small (need >10x10)")
 			}
+		} else {
+			reasons := []string{}
+			if attrs.Class != xproto.WindowClassInputOutput {
+				reasons = append(reasons, fmt.Sprintf("class=%d (need %d)", attrs.Class, xproto.WindowClassInputOutput))
+			}
+			if attrs.MapState != xproto.MapStateViewable {
+				reasons = append(reasons, fmt.Sprintf("mapState=%d (need %d)", attrs.MapState, xproto.MapStateViewable))
+			}
+			log.Printf("  -> Not capturable: %v", reasons)
 		}
 
 		// Recursively search this child's children
