@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -172,18 +173,52 @@ func (m *Manager) Update(cfg *Config) error {
 
 // AddAllowlistedApp adds an application to the allowlist
 func (m *Manager) AddAllowlistedApp(appClass string) error {
-	apps := m.v.GetStringMap("allowlisted_apps")
+	// Get existing apps as a proper map[string]bool
+	apps := make(map[string]bool)
+	existingApps := m.v.GetStringMap("allowlisted_apps")
+	for k, v := range existingApps {
+		if b, ok := v.(bool); ok {
+			apps[k] = b
+		} else {
+			apps[k] = true // Default to true for any non-bool value
+		}
+	}
+
+	// Add new app
 	apps[appClass] = true
 	m.v.Set("allowlisted_apps", apps)
-	return m.Save()
+
+	if err := m.Save(); err != nil {
+		return err
+	}
+
+	log.Printf("Added '%s' to allowlist. Total allowlisted: %d", appClass, len(apps))
+	return nil
 }
 
 // RemoveAllowlistedApp removes an application from the allowlist
 func (m *Manager) RemoveAllowlistedApp(appClass string) error {
-	apps := m.v.GetStringMap("allowlisted_apps")
+	// Get existing apps as a proper map[string]bool
+	apps := make(map[string]bool)
+	existingApps := m.v.GetStringMap("allowlisted_apps")
+	for k, v := range existingApps {
+		if b, ok := v.(bool); ok {
+			apps[k] = b
+		} else {
+			apps[k] = true
+		}
+	}
+
+	// Remove app
 	delete(apps, appClass)
 	m.v.Set("allowlisted_apps", apps)
-	return m.Save()
+
+	if err := m.Save(); err != nil {
+		return err
+	}
+
+	log.Printf("Removed '%s' from allowlist. Total allowlisted: %d", appClass, len(apps))
+	return nil
 }
 
 // IsAllowlisted checks if an application is allowlisted

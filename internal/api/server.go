@@ -176,14 +176,20 @@ func (s *Server) handleAddToAllowlist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Error decoding add allowlist request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("API: Adding '%s' to allowlist", req.AppClass)
+
 	if err := s.configMgr.AddAllowlistedApp(req.AppClass); err != nil {
+		log.Printf("Error adding to allowlist: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("API: Successfully added '%s' to allowlist", req.AppClass)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
@@ -193,10 +199,15 @@ func (s *Server) handleRemoveFromAllowlist(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	appClass := vars["id"]
 
+	log.Printf("API: Removing '%s' from allowlist", appClass)
+
 	if err := s.configMgr.RemoveAllowlistedApp(appClass); err != nil {
+		log.Printf("Error removing from allowlist: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("API: Successfully removed '%s' from allowlist", appClass)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
