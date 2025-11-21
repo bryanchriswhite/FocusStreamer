@@ -137,6 +137,7 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("failed to create graphics context: %w", err)
 	}
 	m.gc = gc
+	log.Printf("Created GC ID: %d for window ID: %d", m.gc, m.displayWindow)
 
 	err = xproto.CreateGCChecked(
 		m.conn,
@@ -148,6 +149,10 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to create GC: %w", err)
 	}
+
+	// Sync to ensure GC is fully created on server
+	m.conn.Sync()
+	log.Printf("GC created successfully")
 
 	m.running = true
 	log.Printf("Virtual display window created: %dx%d (Window ID: %d)", m.width, m.height, m.displayWindow)
@@ -449,12 +454,35 @@ func (m *Manager) putImage(img *image.RGBA) error {
 		// Padding bytes are already zero-initialized
 	}
 
-	// Put image to window using persistent GC
-	err := xproto.PutImageChecked(
+	// Try creating a fresh GC just for this putImage call
+	testGc, err := xproto.NewGcontextId(m.conn)
+	if err != nil {
+		return fmt.Errorf("failed to create test GC ID: %w", err)
+	}
+
+	err = xproto.CreateGCChecked(
+		m.conn,
+		testGc,
+		xproto.Drawable(m.displayWindow),
+		xproto.GcForeground|xproto.GcBackground,
+		[]uint32{
+			0xffffffff, // foreground: white
+			0x00000000, // background: black
+		},
+	).Check()
+	if err != nil {
+		return fmt.Errorf("failed to create test GC: %w", err)
+	}
+	defer xproto.FreeGC(m.conn, testGc)
+
+	log.Printf("putImage: using test GC %d instead of persistent GC %d", testGc, m.gc)
+
+	// Put image to window using test GC
+	err = xproto.PutImageChecked(
 		m.conn,
 		xproto.ImageFormatZPixmap,
 		xproto.Drawable(m.displayWindow),
-		m.gc,
+		testGc,
 		uint16(m.width),
 		uint16(m.height),
 		0, 0, // dst x, y
