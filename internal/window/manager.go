@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"log"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,10 +179,17 @@ func (m *Manager) getWindowInfo(win xproto.Window) (*config.WindowInfo, error) {
 	}
 
 	// Get window class
+	// WM_CLASS format is: instance\0class\0 (two null-terminated strings)
 	classAtom, err := m.getAtom("WM_CLASS")
 	if err == nil {
-		if class, err := m.getProperty(win, classAtom); err == nil {
-			info.Class = class
+		if classRaw, err := m.getProperty(win, classAtom); err == nil {
+			// Parse WM_CLASS: skip first string (instance), get second string (class)
+			parts := strings.Split(classRaw, "\x00")
+			if len(parts) >= 2 && parts[1] != "" {
+				info.Class = parts[1] // Use the class name (second part)
+			} else if len(parts) >= 1 && parts[0] != "" {
+				info.Class = parts[0] // Fallback to instance if class is empty
+			}
 		}
 	}
 
@@ -276,8 +284,11 @@ func (m *Manager) ListWindows() ([]*config.WindowInfo, error) {
 func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
 	cfg := m.configMgr.Get()
 
+	// Normalize class to lowercase for comparison (config keys are lowercased by viper)
+	normalizedClass := strings.ToLower(window.Class)
+
 	// Check exact match in allowlisted apps
-	if cfg.AllowlistedApps[window.Class] {
+	if cfg.AllowlistedApps[normalizedClass] {
 		return true
 	}
 

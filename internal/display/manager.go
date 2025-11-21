@@ -1,10 +1,12 @@
 package display
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"image/png"
 	"log"
 	"sync"
 	"time"
@@ -14,18 +16,24 @@ import (
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 )
 
+// WindowCapturer interface for capturing window screenshots
+type WindowCapturer interface {
+	CaptureWindowScreenshot(windowID uint32) ([]byte, error)
+}
+
 // Manager handles the virtual display window and rendering
 type Manager struct {
-	conn          *xgb.Conn
-	screen        *xproto.ScreenInfo
-	displayWindow xproto.Window
-	width         int
-	height        int
-	fps           int
-	running       bool
-	mu            sync.RWMutex
-	stopChan      chan struct{}
-	currentImage  *image.RGBA
+	conn           *xgb.Conn
+	screen         *xproto.ScreenInfo
+	displayWindow  xproto.Window
+	width          int
+	height         int
+	fps            int
+	running        bool
+	mu             sync.RWMutex
+	stopChan       chan struct{}
+	currentImage   *image.RGBA
+	windowCapturer WindowCapturer
 }
 
 // NewManager creates a new display manager
@@ -54,6 +62,11 @@ func NewManager(cfg *config.DisplayConfig) (*Manager, error) {
 	}
 
 	return m, nil
+}
+
+// SetWindowCapturer sets the window capturer to use for screenshots
+func (m *Manager) SetWindowCapturer(capturer WindowCapturer) {
+	m.windowCapturer = capturer
 }
 
 // Start creates and shows the virtual display window
@@ -156,19 +169,48 @@ func (m *Manager) RenderWindow(windowID uint32) error {
 		return fmt.Errorf("display not running")
 	}
 
-	// Get window geometry
+	// Use window capturer if available (uses XComposite for reliable capture)
+	if m.windowCapturer != nil {
+		pngData, err := m.windowCapturer.CaptureWindowScreenshot(windowID)
+		if err != nil {
+			return fmt.Errorf("failed to capture window via capturer: %w", err)
+		}
+
+		// Decode PNG
+		img, err := png.Decode(bytes.NewReader(pngData))
+		if err != nil {
+			return fmt.Errorf("failed to decode PNG: %w", err)
+		}
+
+		// Convert to RGBA if needed
+		var rgbaImg *image.RGBA
+		if rgba, ok := img.(*image.RGBA); ok {
+			rgbaImg = rgba
+		} else {
+			bounds := img.Bounds()
+			rgbaImg = image.NewRGBA(bounds)
+			draw.Draw(rgbaImg, bounds, img, bounds.Min, draw.Src)
+		}
+
+		// Render to display window
+		if err := m.renderImage(rgbaImg); err != nil {
+			return fmt.Errorf("failed to render image: %w", err)
+		}
+
+		return nil
+	}
+
+	// Fallback to local capture (less reliable, kept for compatibility)
 	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowID)).Reply()
 	if err != nil {
 		return fmt.Errorf("failed to get window geometry: %w", err)
 	}
 
-	// Capture window image
 	img, err := m.captureWindow(xproto.Window(windowID), geom)
 	if err != nil {
 		return fmt.Errorf("failed to capture window: %w", err)
 	}
 
-	// Render to display window
 	if err := m.renderImage(img); err != nil {
 		return fmt.Errorf("failed to render image: %w", err)
 	}
@@ -191,6 +233,8 @@ func (m *Manager) ClearDisplay() error {
 
 // captureWindow captures a window's content as an image
 func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply) (*image.RGBA, error) {
+	log.Printf("Display capture: window=%d, size=%dx%d", win, geom.Width, geom.Height)
+
 	// Get window image data
 	reply, err := xproto.GetImage(
 		m.conn,
@@ -212,6 +256,13 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 	data := reply.Data
 	depth := int(m.screen.RootDepth)
 
+	log.Printf("Display capture: got %d bytes, depth=%d, expected=%d", len(data), depth, int(geom.Width)*int(geom.Height)*4)
+
+	if len(data) == 0 {
+		log.Printf("WARNING: Display capture returned empty data for window %d", win)
+		return img, nil
+	}
+
 	if depth == 24 || depth == 32 {
 		for y := 0; y < int(geom.Height); y++ {
 			for x := 0; x < int(geom.Width); x++ {
@@ -227,6 +278,8 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 				}
 			}
 		}
+	} else {
+		log.Printf("WARNING: Unsupported color depth %d for window %d", depth, win)
 	}
 
 	return img, nil
@@ -293,13 +346,46 @@ func (m *Manager) scaleImage(dst *image.RGBA, dstRect image.Rectangle, src *imag
 
 // putImage sends an image to the X server to be displayed
 func (m *Manager) putImage(img *image.RGBA) error {
-	// Convert RGBA to BGRA (X11 format)
-	data := make([]byte, len(img.Pix))
-	for i := 0; i < len(img.Pix); i += 4 {
-		data[i] = img.Pix[i+2]   // B
-		data[i+1] = img.Pix[i+1] // G
-		data[i+2] = img.Pix[i]   // R
-		data[i+3] = img.Pix[i+3] // A
+	// Validate image dimensions
+	bounds := img.Bounds()
+	imgWidth := bounds.Dx()
+	imgHeight := bounds.Dy()
+
+	log.Printf("putImage: img size=%dx%d, display size=%dx%d, pix len=%d",
+		imgWidth, imgHeight, m.width, m.height, len(img.Pix))
+
+	if imgWidth != m.width || imgHeight != m.height {
+		return fmt.Errorf("image size mismatch: got %dx%d, expected %dx%d",
+			imgWidth, imgHeight, m.width, m.height)
+	}
+
+	// Convert RGBA to X11 format (depends on depth)
+	depth := int(m.screen.RootDepth)
+	var data []byte
+
+	if depth == 24 {
+		// For 24-bit depth: 3 bytes per pixel (RGB, no alpha)
+		data = make([]byte, imgWidth*imgHeight*3)
+		for y := 0; y < imgHeight; y++ {
+			for x := 0; x < imgWidth; x++ {
+				srcIdx := (y*imgWidth + x) * 4
+				dstIdx := (y*imgWidth + x) * 3
+				data[dstIdx] = img.Pix[srcIdx+2]   // B
+				data[dstIdx+1] = img.Pix[srcIdx+1] // G
+				data[dstIdx+2] = img.Pix[srcIdx]   // R
+			}
+		}
+		log.Printf("putImage: converted to 24-bit RGB (%d bytes)", len(data))
+	} else {
+		// For 32-bit depth: 4 bytes per pixel (BGRA)
+		data = make([]byte, len(img.Pix))
+		for i := 0; i < len(img.Pix); i += 4 {
+			data[i] = img.Pix[i+2]   // B
+			data[i+1] = img.Pix[i+1] // G
+			data[i+2] = img.Pix[i]   // R
+			data[i+3] = img.Pix[i+3] // A
+		}
+		log.Printf("putImage: using 32-bit BGRA (%d bytes)", len(data))
 	}
 
 	// Create graphics context if needed
@@ -428,8 +514,18 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 			window := getCurrentWindow()
 
 			// If no window or not allowlisted, clear display
-			if window == nil || !isAllowlisted(window) {
+			if window == nil {
 				if lastWindowID != 0 {
+					log.Printf("UpdateLoop: no focused window, clearing display")
+					m.ClearDisplay()
+					lastWindowID = 0
+				}
+				continue
+			}
+
+			if !isAllowlisted(window) {
+				if lastWindowID != 0 {
+					log.Printf("UpdateLoop: window '%s' (class=%s) not allowlisted, clearing display", window.Title, window.Class)
 					m.ClearDisplay()
 					lastWindowID = 0
 				}
@@ -438,6 +534,7 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 
 			// If window changed, render it
 			if window.ID != lastWindowID {
+				log.Printf("UpdateLoop: rendering allowlisted window '%s' (class=%s, id=%d)", window.Title, window.Class, window.ID)
 				if err := m.RenderWindow(window.ID); err != nil {
 					log.Printf("Failed to render window %d: %v", window.ID, err)
 					m.ClearDisplay()

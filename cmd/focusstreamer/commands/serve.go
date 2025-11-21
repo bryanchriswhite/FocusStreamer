@@ -98,6 +98,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 		defer displayMgr.Stop()
 
+		// Set window manager as the capturer (uses XComposite for reliable capture)
+		displayMgr.SetWindowCapturer(windowMgr)
+
 		// Start the display window
 		if err := displayMgr.Start(); err != nil {
 			return fmt.Errorf("failed to start display: %w", err)

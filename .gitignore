@@ -51,3 +51,4 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+/focusstreamer
