@@ -26,6 +26,7 @@ type Manager struct {
 	conn           *xgb.Conn
 	screen         *xproto.ScreenInfo
 	displayWindow  xproto.Window
+	gc             xproto.Gcontext // Persistent graphics context
 	width          int
 	height         int
 	fps            int
@@ -130,6 +131,24 @@ func (m *Manager) Start() error {
 	// Flush to ensure window is created
 	m.conn.Sync()
 
+	// Create persistent graphics context
+	gc, err := xproto.NewGcontextId(m.conn)
+	if err != nil {
+		return fmt.Errorf("failed to create graphics context: %w", err)
+	}
+	m.gc = gc
+
+	err = xproto.CreateGCChecked(
+		m.conn,
+		m.gc,
+		xproto.Drawable(m.displayWindow),
+		0,
+		nil,
+	).Check()
+	if err != nil {
+		return fmt.Errorf("failed to create GC: %w", err)
+	}
+
 	m.running = true
 	log.Printf("Virtual display window created: %dx%d (Window ID: %d)", m.width, m.height, m.displayWindow)
 
@@ -146,6 +165,11 @@ func (m *Manager) Stop() {
 	}
 
 	close(m.stopChan)
+
+	// Free graphics context
+	if m.gc != 0 {
+		xproto.FreeGC(m.conn, m.gc)
+	}
 
 	if m.displayWindow != 0 {
 		xproto.DestroyWindow(m.conn, m.displayWindow)
@@ -359,64 +383,83 @@ func (m *Manager) putImage(img *image.RGBA) error {
 			imgWidth, imgHeight, m.width, m.height)
 	}
 
-	// Convert RGBA to X11 format (depends on depth)
-	depth := int(m.screen.RootDepth)
-	var data []byte
+	// Get format information for the depth
+	depth := m.screen.RootDepth
+	setup := xproto.Setup(m.conn)
 
-	if depth == 24 {
-		// For 24-bit depth: 3 bytes per pixel (RGB, no alpha)
-		data = make([]byte, imgWidth*imgHeight*3)
-		for y := 0; y < imgHeight; y++ {
-			for x := 0; x < imgWidth; x++ {
-				srcIdx := (y*imgWidth + x) * 4
-				dstIdx := (y*imgWidth + x) * 3
-				data[dstIdx] = img.Pix[srcIdx+2]   // B
-				data[dstIdx+1] = img.Pix[srcIdx+1] // G
-				data[dstIdx+2] = img.Pix[srcIdx]   // R
+	// Find the format that matches our depth
+	var bitsPerPixel uint8
+	var scanlinePad uint8
+	for _, format := range setup.PixmapFormats {
+		if format.Depth == depth {
+			bitsPerPixel = format.BitsPerPixel
+			scanlinePad = format.ScanlinePad
+			log.Printf("putImage: found format for depth %d: bitsPerPixel=%d, scanlinePad=%d",
+				depth, bitsPerPixel, scanlinePad)
+			break
+		}
+	}
+
+	if bitsPerPixel == 0 {
+		return fmt.Errorf("no format found for depth %d", depth)
+	}
+
+	// Calculate bytes per pixel and scanline stride
+	bytesPerPixel := int(bitsPerPixel) / 8
+	unpadded := imgWidth * bytesPerPixel
+
+	// Calculate stride with scanline padding
+	// Scanlines must be padded to scanlinePad bits (usually 32 bits = 4 bytes)
+	padBytes := int(scanlinePad) / 8
+	stride := ((unpadded + padBytes - 1) / padBytes) * padBytes
+
+	log.Printf("putImage: bytesPerPixel=%d, unpadded=%d, stride=%d, total=%d",
+		bytesPerPixel, unpadded, stride, stride*imgHeight)
+
+	// Allocate buffer with proper stride
+	data := make([]byte, stride*imgHeight)
+
+	// Convert RGBA to X11 format with proper padding
+	for y := 0; y < imgHeight; y++ {
+		dstRowStart := y * stride
+		for x := 0; x < imgWidth; x++ {
+			srcIdx := (y*imgWidth + x) * 4
+			dstIdx := dstRowStart + x*bytesPerPixel
+
+			if bytesPerPixel == 4 {
+				// 32-bit or 24-bit depth with 32bpp: BGRx format
+				// Byte order matches X11 visual masks: 0xff (B), 0xff00 (G), 0xff0000 (R)
+				data[dstIdx] = img.Pix[srcIdx+2]     // B (byte 0)
+				data[dstIdx+1] = img.Pix[srcIdx+1]   // G (byte 1)
+				data[dstIdx+2] = img.Pix[srcIdx]     // R (byte 2)
+				if depth == 32 {
+					data[dstIdx+3] = img.Pix[srcIdx+3] // A (byte 3) - only for depth 32
+				} else {
+					data[dstIdx+3] = 0 // Padding byte for depth 24
+				}
+			} else if bytesPerPixel == 3 {
+				// 24-bit: BGR
+				data[dstIdx] = img.Pix[srcIdx+2]     // B
+				data[dstIdx+1] = img.Pix[srcIdx+1]   // G
+				data[dstIdx+2] = img.Pix[srcIdx]     // R
+			} else {
+				return fmt.Errorf("unsupported bytes per pixel: %d", bytesPerPixel)
 			}
 		}
-		log.Printf("putImage: converted to 24-bit RGB (%d bytes)", len(data))
-	} else {
-		// For 32-bit depth: 4 bytes per pixel (BGRA)
-		data = make([]byte, len(img.Pix))
-		for i := 0; i < len(img.Pix); i += 4 {
-			data[i] = img.Pix[i+2]   // B
-			data[i+1] = img.Pix[i+1] // G
-			data[i+2] = img.Pix[i]   // R
-			data[i+3] = img.Pix[i+3] // A
-		}
-		log.Printf("putImage: using 32-bit BGRA (%d bytes)", len(data))
+		// Padding bytes are already zero-initialized
 	}
 
-	// Create graphics context if needed
-	gc, err := xproto.NewGcontextId(m.conn)
-	if err != nil {
-		return fmt.Errorf("failed to create graphics context: %w", err)
-	}
-	defer xproto.FreeGC(m.conn, gc)
-
-	err = xproto.CreateGCChecked(
-		m.conn,
-		gc,
-		xproto.Drawable(m.displayWindow),
-		0,
-		nil,
-	).Check()
-	if err != nil {
-		return fmt.Errorf("failed to create GC: %w", err)
-	}
-
-	// Put image to window
-	err = xproto.PutImageChecked(
+	// Put image to window using persistent GC
+	err := xproto.PutImageChecked(
 		m.conn,
 		xproto.ImageFormatZPixmap,
 		xproto.Drawable(m.displayWindow),
-		gc,
+		m.gc,
 		uint16(m.width),
 		uint16(m.height),
 		0, 0, // dst x, y
 		0,    // left pad
-		m.screen.RootDepth,
+		depth,
 		data,
 	).Check()
 
