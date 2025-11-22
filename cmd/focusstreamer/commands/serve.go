@@ -10,6 +10,7 @@ import (
 	"github.com/bryanchriswhite/FocusStreamer/internal/api"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/display"
+	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -88,6 +89,28 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start window manager: %w", err)
 	}
 
+	// Initialize MJPEG stream output
+	log.Println("Initializing MJPEG stream output...")
+	mjpegOut := output.NewMJPEGOutput(output.Config{
+		Width:  cfg.VirtualDisplay.Width,
+		Height: cfg.VirtualDisplay.Height,
+		FPS:    cfg.VirtualDisplay.FPS,
+	})
+	if err := mjpegOut.Start(); err != nil {
+		return fmt.Errorf("failed to start MJPEG output: %w", err)
+	}
+	defer mjpegOut.Stop()
+
+	// Set MJPEG output on window manager and start streaming
+	windowMgr.SetOutput(mjpegOut)
+	if err := windowMgr.StartStreaming(cfg.VirtualDisplay.FPS); err != nil {
+		return fmt.Errorf("failed to start streaming: %w", err)
+	}
+	defer windowMgr.StopStreaming()
+
+	log.Printf("MJPEG stream initialized (%dx%d @ %d FPS)",
+		cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.VirtualDisplay.FPS)
+
 	// Initialize display manager (if enabled)
 	var displayMgr *display.Manager
 	if cfg.VirtualDisplay.Enabled && !noDisplay {
@@ -119,7 +142,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Initialize API server
 	log.Println("Initializing HTTP server...")
-	server := api.NewServer(windowMgr, configMgr, displayMgr)
+	server := api.NewServer(windowMgr, configMgr, displayMgr, mjpegOut)
 
 	// Start server in a goroutine
 	go func() {
@@ -138,8 +161,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	log.Println("✅ FocusStreamer is running!")
 	log.Printf("   - Web UI: http://localhost:%d", cfg.ServerPort)
 	log.Printf("   - API: http://localhost:%d/api", cfg.ServerPort)
+	log.Printf("   - Stream Viewer: http://localhost:%d/view (open this in browser and share the tab in Discord!)", cfg.ServerPort)
+	log.Printf("   - Raw MJPEG Feed: http://localhost:%d/stream", cfg.ServerPort)
+	log.Printf("   - Stream Stats: http://localhost:%d/stats", cfg.ServerPort)
 	if displayMgr != nil && displayMgr.IsRunning() {
-		log.Printf("   - Virtual Display: Window ID %d (share this in Discord!)", displayMgr.GetWindowID())
+		log.Printf("   - Virtual Display: Window ID %d", displayMgr.GetWindowID())
 	}
 	log.Println("   - Press Ctrl+C to stop")
 	fmt.Println()

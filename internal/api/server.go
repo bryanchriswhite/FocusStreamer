@@ -11,6 +11,7 @@ import (
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/display"
+	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -22,16 +23,18 @@ type Server struct {
 	windowMgr  *window.Manager
 	configMgr  *config.Manager
 	displayMgr *display.Manager
+	mjpegOut   *output.MJPEGOutput
 	upgrader   websocket.Upgrader
 }
 
 // NewServer creates a new API server
-func NewServer(windowMgr *window.Manager, configMgr *config.Manager, displayMgr *display.Manager) *Server {
+func NewServer(windowMgr *window.Manager, configMgr *config.Manager, displayMgr *display.Manager, mjpegOut *output.MJPEGOutput) *Server {
 	s := &Server{
 		router:     mux.NewRouter(),
 		windowMgr:  windowMgr,
 		configMgr:  configMgr,
 		displayMgr: displayMgr,
+		mjpegOut:   mjpegOut,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for development
@@ -70,6 +73,13 @@ func (s *Server) setupRoutes() {
 
 	// Health check
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
+
+	// MJPEG stream endpoints (if MJPEG output is enabled)
+	if s.mjpegOut != nil {
+		s.router.HandleFunc("/view", s.mjpegOut.GetViewerHandler())   // Responsive HTML viewer
+		s.router.HandleFunc("/stream", s.mjpegOut.GetHTTPHandler())    // Raw MJPEG feed
+		s.router.HandleFunc("/stats", s.mjpegOut.GetStatsHandler())
+	}
 
 	// Serve static files (React app from web/dist)
 	s.router.PathPrefix("/").Handler(s.createStaticHandler())

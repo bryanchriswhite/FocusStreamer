@@ -16,6 +16,8 @@ import (
 	"github.com/BurntSushi/xgb/composite"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
+	"github.com/bryanchriswhite/FocusStreamer/internal/output"
+	xdraw "golang.org/x/image/draw"
 )
 
 // Manager handles X11 window detection and monitoring
@@ -29,6 +31,12 @@ type Manager struct {
 	listeners        []chan *config.WindowInfo
 	stopChan         chan struct{}
 	compositeEnabled bool
+
+	// Output for streaming frames
+	output           output.Output
+	streamStopChan   chan struct{}
+	streamRunning    bool
+	streamMu         sync.Mutex
 }
 
 // NewManager creates a new window manager
@@ -569,4 +577,137 @@ func (m *Manager) GetApplications() ([]config.Application, error) {
 	}
 
 	return apps, nil
+}
+
+// SetOutput sets the output destination for captured frames
+func (m *Manager) SetOutput(out output.Output) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	m.output = out
+}
+
+// StartStreaming begins continuous capture and streaming of the focused window
+func (m *Manager) StartStreaming(fps int) error {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+
+	if m.streamRunning {
+		return fmt.Errorf("streaming already running")
+	}
+
+	if m.output == nil {
+		return fmt.Errorf("no output configured")
+	}
+
+	m.streamStopChan = make(chan struct{})
+	m.streamRunning = true
+
+	go m.streamLoop(fps)
+
+	log.Printf("Started streaming at %d FPS", fps)
+	return nil
+}
+
+// StopStreaming stops the continuous capture and streaming
+func (m *Manager) StopStreaming() {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+
+	if !m.streamRunning {
+		return
+	}
+
+	close(m.streamStopChan)
+	m.streamRunning = false
+	log.Printf("Stopped streaming")
+}
+
+// streamLoop continuously captures and streams the focused window
+func (m *Manager) streamLoop(fps int) {
+	ticker := time.NewTicker(time.Second / time.Duration(fps))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.streamStopChan:
+			return
+		case <-ticker.C:
+			m.captureAndStream()
+		}
+	}
+}
+
+// captureAndStream captures the current focused window and sends it to the output
+func (m *Manager) captureAndStream() {
+	// Get current window
+	m.mu.RLock()
+	currentWin := m.currentWindow
+	m.mu.RUnlock()
+
+	if currentWin == nil {
+		// No window focused, send blank frame or skip
+		return
+	}
+
+	// TEMP: Bypass allowlist check for testing
+	// Check if window is allowlisted
+	// if !m.IsWindowAllowlisted(currentWin) {
+	// 	// Not allowlisted, send blank frame or skip
+	// 	return
+	// }
+
+	// Capture window
+	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(currentWin.ID)).Reply()
+	if err != nil {
+		// Window might have been closed
+		return
+	}
+
+	img, err := m.captureWindow(xproto.Window(currentWin.ID), geom)
+	if err != nil {
+		// Failed to capture, skip this frame
+		return
+	}
+
+	// Send to output at native resolution - browser will scale to fit viewport
+	if err := m.output.WriteFrame(img); err != nil {
+		log.Printf("Failed to write frame to output: %v", err)
+	}
+}
+
+// scaleAndLetterbox scales an image to fill the max dimensions while maintaining aspect ratio
+// Always scales to maximize the viewable area without letterboxing
+func (m *Manager) scaleAndLetterbox(src *image.RGBA, out output.Output) *image.RGBA {
+	srcBounds := src.Bounds()
+	srcWidth := srcBounds.Dx()
+	srcHeight := srcBounds.Dy()
+
+	// Target dimensions - scale to fill these while maintaining aspect ratio
+	targetWidth := 1920
+	targetHeight := 1080
+
+	// If source is already the target size, return as-is
+	if srcWidth == targetWidth && srcHeight == targetHeight {
+		return src
+	}
+
+	// Calculate scaling factor to fit within target dimensions while maintaining aspect ratio
+	scaleX := float64(targetWidth) / float64(srcWidth)
+	scaleY := float64(targetHeight) / float64(srcHeight)
+	scale := scaleX
+	if scaleY < scaleX {
+		scale = scaleY
+	}
+
+	// Calculate scaled dimensions (maintain aspect ratio)
+	scaledWidth := int(float64(srcWidth) * scale)
+	scaledHeight := int(float64(srcHeight) * scale)
+
+	// Create destination image at scaled size (no black bars)
+	dst := image.NewRGBA(image.Rect(0, 0, scaledWidth, scaledHeight))
+
+	// Scale the source image to fit
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, srcBounds, xdraw.Src, nil)
+
+	return dst
 }
