@@ -107,8 +107,11 @@ func (s *Server) createStaticHandler() http.Handler {
 	fileServer := http.FileServer(http.Dir(webDistPath))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Don't serve static files for API routes
-		if strings.HasPrefix(r.URL.Path, "/api") {
+		// Don't serve static files for API routes or MJPEG stream routes
+		if strings.HasPrefix(r.URL.Path, "/api") ||
+			strings.HasPrefix(r.URL.Path, "/view") ||
+			strings.HasPrefix(r.URL.Path, "/stream") ||
+			strings.HasPrefix(r.URL.Path, "/stats") {
 			http.NotFound(w, r)
 			return
 		}

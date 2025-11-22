@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"log"
 	"regexp"
@@ -18,6 +19,9 @@ import (
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	xdraw "golang.org/x/image/draw"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
 // Manager handles X11 window detection and monitoring
@@ -33,10 +37,11 @@ type Manager struct {
 	compositeEnabled bool
 
 	// Output for streaming frames
-	output           output.Output
-	streamStopChan   chan struct{}
-	streamRunning    bool
-	streamMu         sync.Mutex
+	output              output.Output
+	streamStopChan      chan struct{}
+	streamRunning       bool
+	streamMu            sync.Mutex
+	lastAllowedWindow   *config.WindowInfo // Last allowlisted window to stream
 }
 
 // NewManager creates a new window manager
@@ -645,33 +650,138 @@ func (m *Manager) captureAndStream() {
 	m.mu.RUnlock()
 
 	if currentWin == nil {
-		// No window focused, send blank frame or skip
+		// No window focused - send placeholder
+		if m.output != nil {
+			cfg := m.configMgr.Get()
+			placeholder := m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
+			m.output.WriteFrame(placeholder)
+		}
 		return
 	}
 
-	// TEMP: Bypass allowlist check for testing
-	// Check if window is allowlisted
-	// if !m.IsWindowAllowlisted(currentWin) {
-	// 	// Not allowlisted, send blank frame or skip
-	// 	return
-	// }
+	var windowToCapture *config.WindowInfo
+	var usePlaceholder bool
 
-	// Capture window
-	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(currentWin.ID)).Reply()
-	if err != nil {
-		// Window might have been closed
-		return
+	// Check if current window is allowlisted
+	if m.IsWindowAllowlisted(currentWin) {
+		// Current window is allowlisted - use it and save as last allowed
+		windowToCapture = currentWin
+		m.streamMu.Lock()
+		m.lastAllowedWindow = currentWin
+		m.streamMu.Unlock()
+		log.Printf("[MJPEG STREAM] Capturing allowlisted window: '%s' (class=%s, id=%d)", currentWin.Title, currentWin.Class, currentWin.ID)
+	} else {
+		// Current window is not allowlisted - use last allowed window if available
+		m.streamMu.Lock()
+		lastAllowed := m.lastAllowedWindow
+		m.streamMu.Unlock()
+
+		if lastAllowed != nil {
+			// We have a previous allowlisted window - keep streaming it (sticky behavior)
+			windowToCapture = lastAllowed
+			log.Printf("[MJPEG STREAM] Current window '%s' not allowlisted, using sticky window: '%s' (class=%s, id=%d)", currentWin.Title, lastAllowed.Title, lastAllowed.Class, lastAllowed.ID)
+		} else {
+			// No allowlisted window yet - show placeholder
+			usePlaceholder = true
+			log.Printf("[MJPEG STREAM] No allowlisted window available, showing placeholder")
+		}
 	}
 
-	img, err := m.captureWindow(xproto.Window(currentWin.ID), geom)
-	if err != nil {
-		// Failed to capture, skip this frame
-		return
+	var img *image.RGBA
+
+	if usePlaceholder {
+		// Create and send placeholder frame
+		cfg := m.configMgr.Get()
+		img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
+	} else {
+		// Capture window
+		geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowToCapture.ID)).Reply()
+		if err != nil {
+			// Window might have been closed - clear lastAllowedWindow and send placeholder
+			m.streamMu.Lock()
+			m.lastAllowedWindow = nil
+			m.streamMu.Unlock()
+
+			// Send placeholder instead of returning without a frame
+			cfg := m.configMgr.Get()
+			img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
+		} else {
+			img, err = m.captureWindow(xproto.Window(windowToCapture.ID), geom)
+			if err != nil {
+				// Failed to capture - clear lastAllowedWindow and send placeholder
+				m.streamMu.Lock()
+				m.lastAllowedWindow = nil
+				m.streamMu.Unlock()
+
+				// Send placeholder instead of returning without a frame
+				cfg := m.configMgr.Get()
+				img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
+			}
+		}
 	}
 
 	// Send to output at native resolution - browser will scale to fit viewport
 	if err := m.output.WriteFrame(img); err != nil {
 		log.Printf("Failed to write frame to output: %v", err)
+	}
+}
+
+// createPlaceholderFrame creates a placeholder frame with a large centered target symbol
+// when no allowlisted window has been focused yet
+func (m *Manager) createPlaceholderFrame(width, height int) *image.RGBA {
+	// Create blank canvas with dark background
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	bgColor := color.RGBA{20, 20, 30, 255} // Dark blue-gray background
+	draw.Draw(img, img.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
+
+	// Draw a large target/circle symbol at ~1/4 size
+	centerX := width / 2
+	centerY := height / 2
+	targetSize := width / 4 // Target takes up 1/4 of width
+
+	// Draw concentric circles to create a target symbol
+	circleColor1 := color.RGBA{70, 130, 180, 255}  // Steel blue
+	circleColor2 := color.RGBA{100, 149, 237, 255} // Cornflower blue
+
+	// Draw outer circle
+	drawCircle(img, centerX, centerY, targetSize/2, circleColor1)
+	// Draw middle circle
+	drawCircle(img, centerX, centerY, targetSize/3, circleColor2)
+	// Draw inner circle
+	drawCircle(img, centerX, centerY, targetSize/6, circleColor1)
+	// Draw center dot
+	drawCircle(img, centerX, centerY, targetSize/12, color.RGBA{255, 255, 255, 255})
+
+	// Add text below the target
+	text := "Waiting for allowlisted window..."
+	textColor := color.RGBA{150, 150, 160, 255}
+
+	// Calculate text position (centered below target)
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(textColor),
+		Face: basicfont.Face7x13,
+		Dot:  fixed.Point26_6{},
+	}
+
+	textWidth := d.MeasureString(text)
+	textX := (fixed.I(width) - textWidth) / 2
+	textY := fixed.I(centerY + targetSize/2 + 40)
+
+	d.Dot = fixed.Point26_6{X: textX, Y: textY}
+	d.DrawString(text)
+
+	return img
+}
+
+// drawCircle draws a filled circle at the given position
+func drawCircle(img *image.RGBA, cx, cy, radius int, col color.Color) {
+	for y := -radius; y <= radius; y++ {
+		for x := -radius; x <= radius; x++ {
+			if x*x+y*y <= radius*radius {
+				img.Set(cx+x, cy+y, col)
+			}
+		}
 	}
 }
 
