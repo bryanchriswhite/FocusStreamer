@@ -9,6 +9,7 @@ import (
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/api"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
+	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 )
 
@@ -18,12 +19,12 @@ func main() {
 
 	// Initialize configuration manager
 	log.Println("Loading configuration...")
-	configMgr, err := config.NewManager()
+	configMgr, err := config.NewManager("")
 	if err != nil {
 		log.Fatalf("Failed to initialize config manager: %v", err)
 	}
 	cfg := configMgr.Get()
-	log.Printf("Configuration loaded from: %s/.config/focusstreamer/config.json", os.Getenv("HOME"))
+	log.Printf("Configuration loaded from: %s", configMgr.GetConfigPath())
 
 	// Initialize window manager
 	log.Println("Connecting to X11 server...")
@@ -39,9 +40,28 @@ func main() {
 		log.Fatalf("Failed to start window manager: %v", err)
 	}
 
+	// Initialize MJPEG stream output
+	log.Println("Initializing MJPEG stream output...")
+	mjpegOut := output.NewMJPEGOutput(output.Config{
+		Width:  cfg.VirtualDisplay.Width,
+		Height: cfg.VirtualDisplay.Height,
+		FPS:    cfg.VirtualDisplay.FPS,
+	})
+	if err := mjpegOut.Start(); err != nil {
+		log.Fatalf("Failed to start MJPEG output: %v", err)
+	}
+	defer mjpegOut.Stop()
+
+	// Set MJPEG output on window manager and start streaming
+	windowMgr.SetOutput(mjpegOut)
+	if err := windowMgr.StartStreaming(cfg.VirtualDisplay.FPS); err != nil {
+		log.Fatalf("Failed to start streaming: %v", err)
+	}
+	defer windowMgr.StopStreaming()
+
 	// Initialize API server
 	log.Println("Initializing HTTP server...")
-	server := api.NewServer(windowMgr, configMgr)
+	server := api.NewServer(windowMgr, configMgr, nil, mjpegOut)
 
 	// Start server in a goroutine
 	go func() {

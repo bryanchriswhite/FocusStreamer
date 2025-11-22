@@ -91,21 +91,33 @@ func NewManager(configFile string) (*Manager, error) {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	// Determine the actual config path to use for saving
+	actualConfigPath := defaultConfigPath + ".yaml"
+	if configFile != "" {
+		actualConfigPath = configFile
+	}
+
 	m := &Manager{
 		v:          v,
-		configPath: defaultConfigPath + ".yaml",
+		configPath: actualConfigPath,
 	}
 
 	// Try to read config file
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// Config file not found, create it with defaults
+			log.Printf("Config file not found, creating new config at: %s", m.configPath)
 			if err := m.Save(); err != nil {
 				return nil, fmt.Errorf("failed to create default config: %w", err)
 			}
 		} else {
 			return nil, fmt.Errorf("failed to read config: %w", err)
 		}
+	} else {
+		// Config loaded successfully - log what was loaded
+		loadedApps := v.GetStringMap("allowlisted_apps")
+		log.Printf("Config loaded from: %s", m.configPath)
+		log.Printf("Loaded %d allowlisted apps: %v", len(loadedApps), loadedApps)
 	}
 
 	return m, nil
@@ -164,6 +176,13 @@ func (m *Manager) Save() error {
 	// Debug: log what we're trying to save
 	allowlistedApps := m.v.GetStringMap("allowlisted_apps")
 	log.Printf("Config contains %d allowlisted apps: %v", len(allowlistedApps), allowlistedApps)
+
+	// Ensure the directory exists for the config file
+	configDir := filepath.Dir(m.configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		log.Printf("Error creating config directory %s: %v", configDir, err)
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
 
 	if err := m.v.WriteConfigAs(m.configPath); err != nil {
 		log.Printf("Error saving config: %v", err)
