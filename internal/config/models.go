@@ -42,8 +42,15 @@ type Config struct {
 	AllowlistPatterns []string        `json:"allowlist_patterns" mapstructure:"allowlist_patterns"`
 	AllowlistedApps   map[string]bool `json:"allowlisted_apps" mapstructure:"allowlisted_apps"`
 	VirtualDisplay    DisplayConfig   `json:"virtual_display" mapstructure:"virtual_display"`
+	Overlay           OverlayConfig   `json:"overlay" mapstructure:"overlay"`
 	ServerPort        int             `json:"server_port" mapstructure:"server_port"`
 	LogLevel          string          `json:"log_level" mapstructure:"log_level"`
+}
+
+// OverlayConfig represents overlay configuration
+type OverlayConfig struct {
+	Enabled bool                     `json:"enabled" mapstructure:"enabled"`
+	Widgets []map[string]interface{} `json:"widgets" mapstructure:"widgets"`
 }
 
 // DisplayConfig represents virtual display configuration
@@ -122,6 +129,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("virtual_display.refresh_hz", 60)
 	v.SetDefault("virtual_display.fps", 10)
 	v.SetDefault("virtual_display.enabled", true)
+	v.SetDefault("overlay.enabled", true)
+	v.SetDefault("overlay.widgets", []map[string]interface{}{})
 }
 
 // GetViper returns the underlying Viper instance
@@ -153,6 +162,9 @@ func (m *Manager) Get() *Config {
 	if cfg.AllowlistedApps == nil {
 		cfg.AllowlistedApps = make(map[string]bool)
 	}
+	if cfg.Overlay.Widgets == nil {
+		cfg.Overlay.Widgets = []map[string]interface{}{}
+	}
 
 	return &cfg
 }
@@ -179,6 +191,7 @@ func (m *Manager) Update(cfg *Config) error {
 	m.v.Set("allowlist_patterns", cfg.AllowlistPatterns)
 	m.v.Set("allowlisted_apps", cfg.AllowlistedApps)
 	m.v.Set("virtual_display", cfg.VirtualDisplay)
+	m.v.Set("overlay", cfg.Overlay)
 	m.v.Set("server_port", cfg.ServerPort)
 	m.v.Set("log_level", cfg.LogLevel)
 	return m.Save()

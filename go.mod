@@ -10,7 +10,7 @@ require (
 	github.com/spf13/viper v1.21.0
 )
 
-require golang.org/x/image v0.33.0 // indirect
+require golang.org/x/image v0.33.0
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect

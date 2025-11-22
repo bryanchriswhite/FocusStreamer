@@ -12,6 +12,7 @@ import (
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/display"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
+	"github.com/bryanchriswhite/FocusStreamer/internal/overlay"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -24,17 +25,19 @@ type Server struct {
 	configMgr  *config.Manager
 	displayMgr *display.Manager
 	mjpegOut   *output.MJPEGOutput
+	overlayMgr *overlay.Manager
 	upgrader   websocket.Upgrader
 }
 
 // NewServer creates a new API server
-func NewServer(windowMgr *window.Manager, configMgr *config.Manager, displayMgr *display.Manager, mjpegOut *output.MJPEGOutput) *Server {
+func NewServer(windowMgr *window.Manager, configMgr *config.Manager, displayMgr *display.Manager, mjpegOut *output.MJPEGOutput, overlayMgr *overlay.Manager) *Server {
 	s := &Server{
 		router:     mux.NewRouter(),
 		windowMgr:  windowMgr,
 		configMgr:  configMgr,
 		displayMgr: displayMgr,
 		mjpegOut:   mjpegOut,
+		overlayMgr: overlayMgr,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for development
@@ -70,6 +73,14 @@ func (s *Server) setupRoutes() {
 
 	// Display management
 	api.HandleFunc("/display/status", s.handleDisplayStatus).Methods("GET")
+
+	// Overlay management
+	api.HandleFunc("/overlay/types", s.handleGetWidgetTypes).Methods("GET")
+	api.HandleFunc("/overlay/instances", s.handleGetWidgetInstances).Methods("GET")
+	api.HandleFunc("/overlay/instances", s.handleCreateWidget).Methods("POST")
+	api.HandleFunc("/overlay/instances/{id}", s.handleUpdateWidget).Methods("PUT")
+	api.HandleFunc("/overlay/instances/{id}", s.handleDeleteWidget).Methods("DELETE")
+	api.HandleFunc("/overlay/enabled", s.handleSetOverlayEnabled).Methods("PUT")
 
 	// Health check
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
@@ -467,4 +478,178 @@ func (s *Server) handleFallbackIndex(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, "/api") {
 		http.NotFound(w, r)
 	}
+}
+
+// Overlay API handlers
+
+func (s *Server) handleGetWidgetTypes(w http.ResponseWriter, r *http.Request) {
+	types := s.overlayMgr.GetAvailableWidgetTypes()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(types)
+}
+
+func (s *Server) handleGetWidgetInstances(w http.ResponseWriter, r *http.Request) {
+	widgets := s.overlayMgr.GetAllWidgets()
+	instances := make([]map[string]interface{}, 0, len(widgets))
+	for _, widget := range widgets {
+		instances = append(instances, widget.GetConfig())
+	}
+
+	response := map[string]interface{}{
+		"enabled":   s.overlayMgr.IsEnabled(),
+		"instances": instances,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) handleCreateWidget(w http.ResponseWriter, r *http.Request) {
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Error decoding create widget request: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	widgetType, ok := req["type"].(string)
+	if !ok {
+		http.Error(w, "missing or invalid 'type' field", http.StatusBadRequest)
+		return
+	}
+
+	widgetID, ok := req["id"].(string)
+	if !ok {
+		http.Error(w, "missing or invalid 'id' field", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("API: Creating widget: %s (type: %s)", widgetID, widgetType)
+
+	// Create widget
+	widget, err := s.overlayMgr.CreateWidget(widgetType, widgetID, req)
+	if err != nil {
+		log.Printf("Error creating widget: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Add to manager
+	if err := s.overlayMgr.AddWidget(widget); err != nil {
+		log.Printf("Error adding widget: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update config to persist
+	if err := s.saveOverlayConfig(); err != nil {
+		log.Printf("Error saving overlay config: %v", err)
+		// Don't fail the request, widget is already added
+	}
+
+	log.Printf("API: Successfully created widget: %s", widgetID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(widget.GetConfig())
+}
+
+func (s *Server) handleUpdateWidget(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	widgetID := vars["id"]
+
+	var config map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		log.Printf("Error decoding update widget request: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("API: Updating widget: %s", widgetID)
+
+	if err := s.overlayMgr.UpdateWidget(widgetID, config); err != nil {
+		log.Printf("Error updating widget: %v", err)
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Update config to persist
+	if err := s.saveOverlayConfig(); err != nil {
+		log.Printf("Error saving overlay config: %v", err)
+		// Don't fail the request, widget is already updated
+	}
+
+	// Get updated widget config
+	widget, exists := s.overlayMgr.GetWidget(widgetID)
+	if !exists {
+		http.Error(w, "widget not found after update", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("API: Successfully updated widget: %s", widgetID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(widget.GetConfig())
+}
+
+func (s *Server) handleDeleteWidget(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	widgetID := vars["id"]
+
+	log.Printf("API: Deleting widget: %s", widgetID)
+
+	if err := s.overlayMgr.RemoveWidget(widgetID); err != nil {
+		log.Printf("Error removing widget: %v", err)
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Update config to persist
+	if err := s.saveOverlayConfig(); err != nil {
+		log.Printf("Error saving overlay config: %v", err)
+		// Don't fail the request, widget is already removed
+	}
+
+	log.Printf("API: Successfully deleted widget: %s", widgetID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleSetOverlayEnabled(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Error decoding set overlay enabled request: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("API: Setting overlay enabled: %v", req.Enabled)
+
+	s.overlayMgr.SetEnabled(req.Enabled)
+
+	// Update config to persist
+	cfg := s.configMgr.Get()
+	cfg.Overlay.Enabled = req.Enabled
+	if err := s.configMgr.Update(cfg); err != nil {
+		log.Printf("Error saving config: %v", err)
+		// Don't fail the request, overlay state is already updated
+	}
+
+	log.Printf("API: Successfully set overlay enabled: %v", req.Enabled)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": req.Enabled,
+		"status":  "success",
+	})
+}
+
+// saveOverlayConfig saves the current overlay configuration to disk
+func (s *Server) saveOverlayConfig() error {
+	cfg := s.configMgr.Get()
+	cfg.Overlay.Widgets = s.overlayMgr.ExportConfig()
+	return s.configMgr.Update(cfg)
 }
