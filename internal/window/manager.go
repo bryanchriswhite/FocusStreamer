@@ -305,12 +305,14 @@ func (m *Manager) ListWindows() ([]*config.WindowInfo, error) {
 func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
 	cfg := m.configMgr.Get()
 
-	// Normalize class to lowercase for comparison (config keys are lowercased by viper)
+	// Normalize class to lowercase for comparison
 	normalizedClass := strings.ToLower(window.Class)
 
 	// Check exact match in allowlisted apps
-	if cfg.AllowlistedApps[normalizedClass] {
-		return true
+	for _, app := range cfg.AllowlistedApps {
+		if app == normalizedClass {
+			return true
+		}
 	}
 
 	// Check pattern matching

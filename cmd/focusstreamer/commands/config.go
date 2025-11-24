@@ -104,7 +104,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	v := configMgr.GetViper()
+	cfg := configMgr.Get()
 
 	// Handle different types
 	switch key {
@@ -113,31 +113,54 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		if _, err := fmt.Sscanf(value, "%d", &port); err != nil {
 			return fmt.Errorf("invalid port number: %s", value)
 		}
-		v.Set(key, port)
+		cfg.ServerPort = port
 	case "log_level":
 		validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 		if !validLevels[value] {
 			return fmt.Errorf("invalid log level: %s (use: debug, info, warn, error)", value)
 		}
-		v.Set(key, value)
-	case "virtual_display.width", "virtual_display.height", "virtual_display.refresh_hz":
+		cfg.LogLevel = value
+	case "virtual_display.width":
 		var num int
 		if _, err := fmt.Sscanf(value, "%d", &num); err != nil {
 			return fmt.Errorf("invalid number: %s", value)
 		}
-		v.Set(key, num)
+		cfg.VirtualDisplay.Width = num
+	case "virtual_display.height":
+		var num int
+		if _, err := fmt.Sscanf(value, "%d", &num); err != nil {
+			return fmt.Errorf("invalid number: %s", value)
+		}
+		cfg.VirtualDisplay.Height = num
+	case "virtual_display.refresh_hz":
+		var num int
+		if _, err := fmt.Sscanf(value, "%d", &num); err != nil {
+			return fmt.Errorf("invalid number: %s", value)
+		}
+		cfg.VirtualDisplay.RefreshHz = num
+	case "virtual_display.fps":
+		var num int
+		if _, err := fmt.Sscanf(value, "%d", &num); err != nil {
+			return fmt.Errorf("invalid number: %s", value)
+		}
+		cfg.VirtualDisplay.FPS = num
 	case "virtual_display.enabled":
 		var enabled bool
 		if _, err := fmt.Sscanf(value, "%t", &enabled); err != nil {
 			return fmt.Errorf("invalid boolean: %s (use: true or false)", value)
 		}
-		v.Set(key, enabled)
+		cfg.VirtualDisplay.Enabled = enabled
+	case "overlay.enabled":
+		var enabled bool
+		if _, err := fmt.Sscanf(value, "%t", &enabled); err != nil {
+			return fmt.Errorf("invalid boolean: %s (use: true or false)", value)
+		}
+		cfg.Overlay.Enabled = enabled
 	default:
-		// Default to string
-		v.Set(key, value)
+		return fmt.Errorf("unknown configuration key: %s", key)
 	}
 
-	if err := configMgr.Save(); err != nil {
+	if err := configMgr.Update(cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
@@ -153,12 +176,35 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	v := configMgr.GetViper()
-	if !v.IsSet(key) {
-		return fmt.Errorf("configuration key not found: %s", key)
+	cfg := configMgr.Get()
+
+	var value interface{}
+	switch key {
+	case "server_port":
+		value = cfg.ServerPort
+	case "log_level":
+		value = cfg.LogLevel
+	case "virtual_display.width":
+		value = cfg.VirtualDisplay.Width
+	case "virtual_display.height":
+		value = cfg.VirtualDisplay.Height
+	case "virtual_display.refresh_hz":
+		value = cfg.VirtualDisplay.RefreshHz
+	case "virtual_display.fps":
+		value = cfg.VirtualDisplay.FPS
+	case "virtual_display.enabled":
+		value = cfg.VirtualDisplay.Enabled
+	case "overlay.enabled":
+		value = cfg.Overlay.Enabled
+	case "allowed_apps":
+		value = cfg.AllowlistedApps
+	case "allowlist_patterns":
+		value = cfg.AllowlistPatterns
+	default:
+		return fmt.Errorf("unknown configuration key: %s", key)
 	}
 
-	fmt.Println(v.Get(key))
+	fmt.Println(value)
 	return nil
 }
 

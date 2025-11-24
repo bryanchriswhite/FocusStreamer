@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // Application represents a running application
@@ -39,39 +40,38 @@ type Geometry struct {
 
 // Config represents the application configuration
 type Config struct {
-	AllowlistPatterns []string        `json:"allowlist_patterns" mapstructure:"allowlist_patterns"`
-	AllowlistedApps   map[string]bool `json:"allowlisted_apps" mapstructure:"allowlisted_apps"`
-	VirtualDisplay    DisplayConfig   `json:"virtual_display" mapstructure:"virtual_display"`
-	Overlay           OverlayConfig   `json:"overlay" mapstructure:"overlay"`
-	ServerPort        int             `json:"server_port" mapstructure:"server_port"`
-	LogLevel          string          `json:"log_level" mapstructure:"log_level"`
+	AllowlistPatterns []string      `json:"allowlist_patterns" yaml:"allowlist_patterns"`
+	AllowlistedApps   []string      `json:"allowed_apps" yaml:"allowed_apps"`
+	VirtualDisplay    DisplayConfig `json:"virtual_display" yaml:"virtual_display"`
+	Overlay           OverlayConfig `json:"overlay" yaml:"overlay"`
+	ServerPort        int           `json:"server_port" yaml:"server_port"`
+	LogLevel          string        `json:"log_level" yaml:"log_level"`
 }
 
 // OverlayConfig represents overlay configuration
 type OverlayConfig struct {
-	Enabled bool                     `json:"enabled" mapstructure:"enabled"`
-	Widgets []map[string]interface{} `json:"widgets" mapstructure:"widgets"`
+	Enabled bool                     `json:"enabled" yaml:"enabled"`
+	Widgets []map[string]interface{} `json:"widgets" yaml:"widgets"`
 }
 
 // DisplayConfig represents virtual display configuration
 type DisplayConfig struct {
-	Width     int  `json:"width" mapstructure:"width"`
-	Height    int  `json:"height" mapstructure:"height"`
-	RefreshHz int  `json:"refresh_hz" mapstructure:"refresh_hz"`
-	FPS       int  `json:"fps" mapstructure:"fps"`
-	Enabled   bool `json:"enabled" mapstructure:"enabled"`
+	Width     int  `json:"width" yaml:"width"`
+	Height    int  `json:"height" yaml:"height"`
+	RefreshHz int  `json:"refresh_hz" yaml:"refresh_hz"`
+	FPS       int  `json:"fps" yaml:"fps"`
+	Enabled   bool `json:"enabled" yaml:"enabled"`
 }
 
-// Manager handles configuration with Viper
+// Manager handles configuration
 type Manager struct {
-	v          *viper.Viper
 	configPath string
+	config     *Config
+	mu         sync.RWMutex
 }
 
-// NewManager creates a new configuration manager using Viper
+// NewManager creates a new configuration manager
 func NewManager(configFile string) (*Manager, error) {
-	v := viper.New()
-
 	// Set default configuration path
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -79,124 +79,131 @@ func NewManager(configFile string) (*Manager, error) {
 	}
 
 	configDir := filepath.Join(homeDir, ".config", "focusstreamer")
-	defaultConfigPath := filepath.Join(configDir, "config")
+	defaultConfigPath := filepath.Join(configDir, "config.yaml")
 
 	// Use provided config file or default
+	actualConfigPath := defaultConfigPath
 	if configFile != "" {
-		v.SetConfigFile(configFile)
-	} else {
-		v.AddConfigPath(configDir)
-		v.SetConfigName("config")
-		v.SetConfigType("yaml")
+		actualConfigPath = configFile
 	}
-
-	// Set defaults
-	setDefaults(v)
 
 	// Create config directory if it doesn't exist
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	// Determine the actual config path to use for saving
-	actualConfigPath := defaultConfigPath + ".yaml"
-	if configFile != "" {
-		actualConfigPath = configFile
-	}
-
 	m := &Manager{
-		v:          v,
 		configPath: actualConfigPath,
 	}
 
 	// Try to read config file
-	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+	if err := m.load(); err != nil {
+		if os.IsNotExist(err) {
 			// Config file not found, create it with defaults
 			logger.WithComponent("config").Info().
 				Str("path", m.configPath).
 				Msg("Config file not found, creating new config")
+			m.config = m.getDefaults()
 			if err := m.Save(); err != nil {
 				return nil, fmt.Errorf("failed to create default config: %w", err)
 			}
 		} else {
 			return nil, fmt.Errorf("failed to read config: %w", err)
 		}
-	} else {
-		// Config loaded successfully - log what was loaded
-		loadedApps := v.GetStringMap("allowlisted_apps")
-		logger.WithComponent("config").Info().
-			Str("path", m.configPath).
-			Int("allowlisted_count", len(loadedApps)).
-			Interface("allowlisted_apps", loadedApps).
-			Msg("Config loaded successfully")
 	}
+
+	logger.WithComponent("config").Info().
+		Str("path", m.configPath).
+		Int("allowed_apps", len(m.config.AllowlistedApps)).
+		Msg("Config loaded")
 
 	return m, nil
 }
 
-// setDefaults sets default configuration values
-func setDefaults(v *viper.Viper) {
-	v.SetDefault("server_port", 8080)
-	v.SetDefault("log_level", "info")
-	v.SetDefault("allowlist_patterns", []string{})
-	v.SetDefault("allowlisted_apps", map[string]bool{})
-	v.SetDefault("virtual_display.width", 1920)
-	v.SetDefault("virtual_display.height", 1080)
-	v.SetDefault("virtual_display.refresh_hz", 60)
-	v.SetDefault("virtual_display.fps", 10)
-	v.SetDefault("virtual_display.enabled", true)
-	v.SetDefault("overlay.enabled", true)
-	v.SetDefault("overlay.widgets", []map[string]interface{}{})
+// getDefaults returns default configuration
+func (m *Manager) getDefaults() *Config {
+	return &Config{
+		ServerPort:        8080,
+		LogLevel:          "info",
+		AllowlistPatterns: []string{},
+		AllowlistedApps:   []string{},
+		VirtualDisplay: DisplayConfig{
+			Width:     1920,
+			Height:    1080,
+			RefreshHz: 60,
+			FPS:       10,
+			Enabled:   true,
+		},
+		Overlay: OverlayConfig{
+			Enabled: true,
+			Widgets: []map[string]interface{}{},
+		},
+	}
 }
 
-// GetViper returns the underlying Viper instance
-func (m *Manager) GetViper() *viper.Viper {
-	return m.v
-}
-
-// Get returns the current configuration
-func (m *Manager) Get() *Config {
-	var cfg Config
-	if err := m.v.Unmarshal(&cfg); err != nil {
-		// Return defaults if unmarshal fails
-		return &Config{
-			ServerPort:        m.v.GetInt("server_port"),
-			LogLevel:          m.v.GetString("log_level"),
-			AllowlistPatterns: []string{},
-			AllowlistedApps:   make(map[string]bool),
-			VirtualDisplay: DisplayConfig{
-				Width:     1920,
-				Height:    1080,
-				RefreshHz: 60,
-				FPS:       10,
-				Enabled:   true,
-			},
-		}
+// load reads the configuration from disk
+func (m *Manager) load() error {
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return err
 	}
 
-	// Ensure maps are initialized
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Initialize slices if nil
 	if cfg.AllowlistedApps == nil {
-		cfg.AllowlistedApps = make(map[string]bool)
+		cfg.AllowlistedApps = []string{}
+	}
+	if cfg.AllowlistPatterns == nil {
+		cfg.AllowlistPatterns = []string{}
 	}
 	if cfg.Overlay.Widgets == nil {
 		cfg.Overlay.Widgets = []map[string]interface{}{}
 	}
 
+	m.mu.Lock()
+	m.config = &cfg
+	m.mu.Unlock()
+
+	return nil
+}
+
+// Get returns the current configuration
+func (m *Manager) Get() *Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.config == nil {
+		return m.getDefaults()
+	}
+
+	// Return a copy to prevent external modification
+	cfg := *m.config
 	return &cfg
 }
 
 // Save saves the current configuration to disk
 func (m *Manager) Save() error {
-	allowlistedApps := m.v.GetStringMap("allowlisted_apps")
+	m.mu.RLock()
+	cfg := m.config
+	m.mu.RUnlock()
+
+	if cfg == nil {
+		cfg = m.getDefaults()
+	}
 
 	logger.WithComponent("config").Debug().
 		Str("path", m.configPath).
-		Int("allowlisted_count", len(allowlistedApps)).
-		Interface("allowlisted_apps", allowlistedApps).
+		Int("allowlisted_count", len(cfg.AllowlistedApps)).
+		Interface("allowed_apps", cfg.AllowlistedApps).
+		Int("pattern_count", len(cfg.AllowlistPatterns)).
+		Interface("patterns", cfg.AllowlistPatterns).
 		Msg("Saving config")
 
-	// Ensure the directory exists for the config file
+	// Ensure the directory exists
 	configDir := filepath.Dir(m.configPath)
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		logger.WithComponent("config").Error().
@@ -206,11 +213,21 @@ func (m *Manager) Save() error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	if err := m.v.WriteConfigAs(m.configPath); err != nil {
+	// Marshal to YAML
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		logger.WithComponent("config").Error().
+			Err(err).
+			Msg("Failed to marshal config")
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(m.configPath, data, 0644); err != nil {
 		logger.WithComponent("config").Error().
 			Err(err).
 			Str("path", m.configPath).
-			Msg("Failed to save config")
+			Msg("Failed to write config")
 		return err
 	}
 
@@ -222,44 +239,33 @@ func (m *Manager) Save() error {
 
 // Update updates the entire configuration
 func (m *Manager) Update(cfg *Config) error {
-	m.v.Set("allowlist_patterns", cfg.AllowlistPatterns)
-	m.v.Set("allowlisted_apps", cfg.AllowlistedApps)
-	m.v.Set("virtual_display", cfg.VirtualDisplay)
-	m.v.Set("overlay", cfg.Overlay)
-	m.v.Set("server_port", cfg.ServerPort)
-	m.v.Set("log_level", cfg.LogLevel)
+	m.mu.Lock()
+	m.config = cfg
+	m.mu.Unlock()
 	return m.Save()
 }
 
 // AddAllowlistedApp adds an application to the allowlist
 func (m *Manager) AddAllowlistedApp(appClass string) error {
-	// Viper lowercases all map keys, so we must do the same
-	normalizedKey := strings.ToLower(appClass)
+	// Normalize to lowercase for case-insensitive matching
+	normalized := strings.ToLower(appClass)
 
-	// Get existing apps - use map[string]interface{} for Viper compatibility
-	apps := make(map[string]interface{})
-	existingApps := m.v.GetStringMap("allowlisted_apps")
-
-	logger.WithComponent("config").Debug().
-		Str("app_class", appClass).
-		Str("normalized_key", normalizedKey).
-		Int("existing_count", len(existingApps)).
-		Msg("Adding app to allowlist")
-
-	// Copy existing entries
-	for k, v := range existingApps {
-		apps[k] = v
+	m.mu.Lock()
+	// Check if already exists (prevent duplicates)
+	for _, app := range m.config.AllowlistedApps {
+		if app == normalized {
+			m.mu.Unlock()
+			logger.WithComponent("config").Debug().
+				Str("app_class", appClass).
+				Msg("App already in allowlist, skipping")
+			return nil
+		}
 	}
 
-	// Add new app with normalized key
-	apps[normalizedKey] = true
-	m.v.Set("allowlisted_apps", apps)
-
-	// Verify the set worked
-	verification := m.v.GetStringMap("allowlisted_apps")
-	logger.WithComponent("config").Debug().
-		Interface("verification", verification).
-		Msg("Verification after set")
+	// Append new app
+	m.config.AllowlistedApps = append(m.config.AllowlistedApps, normalized)
+	totalCount := len(m.config.AllowlistedApps)
+	m.mu.Unlock()
 
 	if err := m.Save(); err != nil {
 		logger.WithComponent("config").Error().
@@ -271,29 +277,27 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 
 	logger.WithComponent("config").Info().
 		Str("app_class", appClass).
-		Str("normalized_key", normalizedKey).
-		Int("total_count", len(apps)).
+		Int("total_count", totalCount).
 		Msg("Successfully added app to allowlist")
 	return nil
 }
 
 // RemoveAllowlistedApp removes an application from the allowlist
 func (m *Manager) RemoveAllowlistedApp(appClass string) error {
-	// Viper lowercases all map keys, so we must do the same
-	normalizedKey := strings.ToLower(appClass)
+	// Normalize to lowercase for case-insensitive matching
+	normalized := strings.ToLower(appClass)
 
-	// Get existing apps - use map[string]interface{} for Viper compatibility
-	apps := make(map[string]interface{})
-	existingApps := m.v.GetStringMap("allowlisted_apps")
-
-	// Copy existing entries
-	for k, v := range existingApps {
-		apps[k] = v
+	m.mu.Lock()
+	// Filter out the app to remove
+	filtered := make([]string, 0, len(m.config.AllowlistedApps))
+	for _, app := range m.config.AllowlistedApps {
+		if app != normalized {
+			filtered = append(filtered, app)
+		}
 	}
-
-	// Remove app with normalized key
-	delete(apps, normalizedKey)
-	m.v.Set("allowlisted_apps", apps)
+	m.config.AllowlistedApps = filtered
+	totalCount := len(filtered)
+	m.mu.Unlock()
 
 	if err := m.Save(); err != nil {
 		return err
@@ -301,72 +305,76 @@ func (m *Manager) RemoveAllowlistedApp(appClass string) error {
 
 	logger.WithComponent("config").Info().
 		Str("app_class", appClass).
-		Str("normalized_key", normalizedKey).
-		Int("total_count", len(apps)).
+		Int("total_count", totalCount).
 		Msg("Removed app from allowlist")
 	return nil
 }
 
 // IsAllowlisted checks if an application is allowlisted
 func (m *Manager) IsAllowlisted(appClass string) bool {
-	// Viper lowercases all map keys, so we must normalize for lookup
-	normalizedKey := strings.ToLower(appClass)
-	apps := m.v.GetStringMap("allowlisted_apps")
-	val, exists := apps[normalizedKey]
+	// Normalize to lowercase for case-insensitive matching
+	normalized := strings.ToLower(appClass)
 
-	if !exists {
-		return false
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, app := range m.config.AllowlistedApps {
+		if app == normalized {
+			return true
+		}
 	}
-	// Handle both bool and interface{} types
-	switch v := val.(type) {
-	case bool:
-		return v
-	default:
-		return true
-	}
+	return false
 }
 
 // AddPattern adds an allowlist pattern
 func (m *Manager) AddPattern(pattern string) error {
-	patterns := m.v.GetStringSlice("allowlist_patterns")
-	patterns = append(patterns, pattern)
-	m.v.Set("allowlist_patterns", patterns)
+	m.mu.Lock()
+	m.config.AllowlistPatterns = append(m.config.AllowlistPatterns, pattern)
+	m.mu.Unlock()
 	return m.Save()
 }
 
 // RemovePattern removes an allowlist pattern
 func (m *Manager) RemovePattern(pattern string) error {
-	patterns := m.v.GetStringSlice("allowlist_patterns")
-	for i, p := range patterns {
+	m.mu.Lock()
+	for i, p := range m.config.AllowlistPatterns {
 		if p == pattern {
-			patterns = append(patterns[:i], patterns[i+1:]...)
+			m.config.AllowlistPatterns = append(m.config.AllowlistPatterns[:i], m.config.AllowlistPatterns[i+1:]...)
 			break
 		}
 	}
-	m.v.Set("allowlist_patterns", patterns)
+	m.mu.Unlock()
 	return m.Save()
 }
 
 // SetPort sets the server port
 func (m *Manager) SetPort(port int) error {
-	m.v.Set("server_port", port)
+	m.mu.Lock()
+	m.config.ServerPort = port
+	m.mu.Unlock()
 	return m.Save()
 }
 
 // GetPort gets the server port
 func (m *Manager) GetPort() int {
-	return m.v.GetInt("server_port")
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.ServerPort
 }
 
 // SetLogLevel sets the log level
 func (m *Manager) SetLogLevel(level string) error {
-	m.v.Set("log_level", level)
+	m.mu.Lock()
+	m.config.LogLevel = level
+	m.mu.Unlock()
 	return m.Save()
 }
 
 // GetLogLevel gets the log level
 func (m *Manager) GetLogLevel() string {
-	return m.v.GetString("log_level")
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.LogLevel
 }
 
 // GetConfigPath returns the path to the config file

@@ -97,7 +97,7 @@ func runAllowlistList(cmd *cobra.Command, args []string) error {
 	if len(cfg.AllowlistedApps) == 0 {
 		fmt.Println("  (none)")
 	} else {
-		for app := range cfg.AllowlistedApps {
+		for _, app := range cfg.AllowlistedApps {
 			fmt.Printf("  • %s\n", app)
 		}
 	}
