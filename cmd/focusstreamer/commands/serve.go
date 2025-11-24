@@ -8,7 +8,6 @@ import (
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/api"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
-	"github.com/bryanchriswhite/FocusStreamer/internal/display"
 	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	"github.com/bryanchriswhite/FocusStreamer/internal/overlay"
@@ -38,11 +37,8 @@ and viewing the currently focused window.`,
 	RunE: runServe,
 }
 
-var noDisplay bool
-
 func init() {
 	rootCmd.AddCommand(serveCmd)
-	serveCmd.Flags().BoolVar(&noDisplay, "no-display", false, "disable virtual display window")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -137,38 +133,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger.WithComponent("serve").Info().Msgf("MJPEG stream initialized (%dx%d @ %d FPS)",
 		cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.VirtualDisplay.FPS)
 
-	// Initialize display manager (if enabled)
-	var displayMgr *display.Manager
-	if cfg.VirtualDisplay.Enabled && !noDisplay {
-		logger.WithComponent("serve").Info().Msg("Initializing virtual display...")
-		displayMgr, err = display.NewManager(&cfg.VirtualDisplay)
-		if err != nil {
-			return fmt.Errorf("failed to initialize display manager: %w", err)
-		}
-		defer displayMgr.Stop()
-
-		// Set window manager as the capturer (uses XComposite for reliable capture)
-		displayMgr.SetWindowCapturer(windowMgr)
-
-		// Start the display window
-		if err := displayMgr.Start(); err != nil {
-			return fmt.Errorf("failed to start display: %w", err)
-		}
-
-		// Start display update loop
-		go displayMgr.UpdateLoop(
-			windowMgr.GetCurrentWindow,
-			windowMgr.IsWindowAllowlisted,
-		)
-
-		logger.WithComponent("serve").Info().Msgf("Virtual display created (Window ID: %d)", displayMgr.GetWindowID())
-	} else {
-		logger.WithComponent("serve").Info().Msg("Virtual display disabled")
-	}
-
 	// Initialize API server
 	logger.WithComponent("serve").Info().Msg("Initializing HTTP server...")
-	server := api.NewServer(windowMgr, configMgr, displayMgr, mjpegOut, overlayMgr)
+	server := api.NewServer(windowMgr, configMgr, nil, mjpegOut, overlayMgr)
 
 	// Start server in a goroutine
 	go func() {
@@ -191,9 +158,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger.WithComponent("serve").Info().Msgf("   - Raw MJPEG Feed: http://localhost:%d/stream", cfg.ServerPort)
 	logger.WithComponent("serve").Info().Msgf("   - Stream Stats: http://localhost:%d/stats", cfg.ServerPort)
 	logger.WithComponent("serve").Info().Msgf("   - Overlay API: http://localhost:%d/api/overlay/types", cfg.ServerPort)
-	if displayMgr != nil && displayMgr.IsRunning() {
-		logger.WithComponent("serve").Info().Msgf("   - Virtual Display: Window ID %d", displayMgr.GetWindowID())
-	}
 	logger.WithComponent("serve").Info().Msg("   - Press Ctrl+C to stop")
 	fmt.Println()
 
