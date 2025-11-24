@@ -1,0 +1,147 @@
+.application-preview {
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  padding: 1.5rem;
+}
+
+.preview-empty {
+  background: white;
+  border-radius: 8px;
+  border: 2px dashed #e0e0e0;
+  padding: 3rem 1.5rem;
+  text-align: center;
+}
+
+.preview-placeholder {
+  color: #999;
+}
+
+.preview-placeholder p {
+  margin-bottom: 0.5rem;
+}
+
+.preview-placeholder .hint {
+  font-size: 0.875rem;
+  color: #bbb;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #f0f0f0;
+}
+
+.preview-header h3 {
+  margin: 0;
+  color: #333;
+  font-size: 1.25rem;
+}
+
+.status-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 14px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.status-badge.allowlisted {
+  background-color: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #4caf50;
+}
+
+.preview-screenshot {
+  margin-bottom: 1.5rem;
+  min-height: 200px;
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-screenshot img {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+  display: block;
+}
+
+.screenshot-loading,
+.screenshot-error {
+  padding: 2rem;
+  text-align: center;
+  color: #666;
+}
+
+.screenshot-error {
+  color: #d32f2f;
+}
+
+.screenshot-loading p,
+.screenshot-error p {
+  margin: 0;
+}
+
+.preview-details {
+  margin-bottom: 1.5rem;
+}
+
+.detail-row {
+  display: flex;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #f5f5f5;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.detail-label {
+  flex: 0 0 140px;
+  font-weight: 500;
+  color: #666;
+}
+
+.detail-value {
+  flex: 1;
+  color: #333;
+}
+
+.detail-value.monospace {
+  font-family: 'Courier New', monospace;
+  background-color: #f5f5f5;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+}
+
+.preview-note {
+  background-color: #e3f2fd;
+  border-left: 4px solid #2196f3;
+  padding: 1rem;
+  border-radius: 4px;
+}
+
+.preview-note p {
+  margin: 0 0 0.5rem 0;
+  color: #1565c0;
+}
+
+.preview-note p:last-child {
+  margin-bottom: 0;
+}
+
+.preview-note strong {
+  font-weight: 600;
+}
+
+.preview-note .hint {
+  font-size: 0.875rem;
+  color: #1976d2;
+}

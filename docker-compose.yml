@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  focusstreamer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: focusstreamer:latest
+    container_name: focusstreamer
+    ports:
+      - "8080:8080"
+    volumes:
+      # X11 socket for display access
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Config persistence
+      - ~/.config/focusstreamer:/root/.config/focusstreamer
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    network_mode: host
+    restart: unless-stopped
+    # Required for X11 access
+    security_opt:
+      - seccomp:unconfined
+    devices:
+      - /dev/dri:/dev/dri  # GPU access if needed

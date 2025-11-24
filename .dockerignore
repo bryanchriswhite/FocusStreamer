@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+web/dist/
+web/node_modules/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.test
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+
+# Misc
+.DS_Store
