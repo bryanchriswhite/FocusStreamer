@@ -18,6 +18,7 @@ import (
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
+	"github.com/bryanchriswhite/FocusStreamer/internal/overlay"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -38,6 +39,7 @@ type Manager struct {
 
 	// Output for streaming frames
 	output              output.Output
+	overlayMgr          *overlay.Manager
 	streamStopChan      chan struct{}
 	streamRunning       bool
 	streamMu            sync.Mutex
@@ -607,6 +609,13 @@ func (m *Manager) SetOutput(out output.Output) {
 	m.output = out
 }
 
+// SetOverlayManager sets the overlay manager for rendering overlays
+func (m *Manager) SetOverlayManager(overlayMgr *overlay.Manager) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	m.overlayMgr = overlayMgr
+}
+
 // StartStreaming begins continuous capture and streaming of the focused window
 func (m *Manager) StartStreaming(fps int) error {
 	m.streamMu.Lock()
@@ -733,6 +742,13 @@ func (m *Manager) captureAndStream() {
 				cfg := m.configMgr.Get()
 				img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
 			}
+		}
+	}
+
+	// Apply overlay rendering if overlay manager is set
+	if m.overlayMgr != nil {
+		if err := m.overlayMgr.Render(img); err != nil {
+			log.Printf("Failed to render overlay: %v", err)
 		}
 	}
 

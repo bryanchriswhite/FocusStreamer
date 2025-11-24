@@ -11,6 +11,7 @@ import (
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/display"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
+	"github.com/bryanchriswhite/FocusStreamer/internal/overlay"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -89,6 +90,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start window manager: %w", err)
 	}
 
+	// Initialize overlay manager
+	log.Println("Initializing overlay system...")
+	overlayMgr := overlay.NewManager()
+	overlayMgr.SetEnabled(cfg.Overlay.Enabled)
+
+	// Load overlay widgets from config
+	if len(cfg.Overlay.Widgets) > 0 {
+		log.Printf("Loading %d overlay widgets from config...", len(cfg.Overlay.Widgets))
+		if err := overlayMgr.LoadFromConfig(cfg.Overlay.Widgets); err != nil {
+			log.Printf("Warning: failed to load overlay widgets: %v", err)
+		}
+	}
+	defer overlayMgr.Clear()
+
+	log.Printf("Overlay system initialized (enabled: %v, widgets: %d)",
+		overlayMgr.IsEnabled(), len(overlayMgr.GetAllWidgets()))
+
 	// Initialize MJPEG stream output
 	log.Println("Initializing MJPEG stream output...")
 	mjpegOut := output.NewMJPEGOutput(output.Config{
@@ -101,8 +119,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	defer mjpegOut.Stop()
 
-	// Set MJPEG output on window manager and start streaming
+	// Set MJPEG output and overlay manager on window manager
 	windowMgr.SetOutput(mjpegOut)
+	windowMgr.SetOverlayManager(overlayMgr)
+
+	// Start streaming
 	if err := windowMgr.StartStreaming(cfg.VirtualDisplay.FPS); err != nil {
 		return fmt.Errorf("failed to start streaming: %w", err)
 	}
@@ -142,7 +163,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Initialize API server
 	log.Println("Initializing HTTP server...")
-	server := api.NewServer(windowMgr, configMgr, displayMgr, mjpegOut)
+	server := api.NewServer(windowMgr, configMgr, displayMgr, mjpegOut, overlayMgr)
 
 	// Start server in a goroutine
 	go func() {
@@ -164,6 +185,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	log.Printf("   - Stream Viewer: http://localhost:%d/view (open this in browser and share the tab in Discord!)", cfg.ServerPort)
 	log.Printf("   - Raw MJPEG Feed: http://localhost:%d/stream", cfg.ServerPort)
 	log.Printf("   - Stream Stats: http://localhost:%d/stats", cfg.ServerPort)
+	log.Printf("   - Overlay API: http://localhost:%d/api/overlay/types", cfg.ServerPort)
 	if displayMgr != nil && displayMgr.IsRunning() {
 		log.Printf("   - Virtual Display: Window ID %d", displayMgr.GetWindowID())
 	}
