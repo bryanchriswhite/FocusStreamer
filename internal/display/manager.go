@@ -7,13 +7,13 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 )
 
 // WindowCapturer interface for capturing window screenshots
@@ -115,12 +115,16 @@ func (m *Manager) Start() error {
 	// Set window title
 	title := "FocusStreamer - Virtual Display"
 	if err := m.setWindowTitle(title); err != nil {
-		log.Printf("Warning: failed to set window title: %v", err)
+		logger.WithComponent("display").Warn().
+			Err(err).
+			Msg("Failed to set window title")
 	}
 
 	// Set window class for identification
 	if err := m.setWindowClass("focusstreamer", "FocusStreamer"); err != nil {
-		log.Printf("Warning: failed to set window class: %v", err)
+		logger.WithComponent("display").Warn().
+			Err(err).
+			Msg("Failed to set window class")
 	}
 
 	// Map (show) the window
@@ -137,7 +141,10 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("failed to create graphics context: %w", err)
 	}
 	m.gc = gc
-	log.Printf("Created GC ID: %d for window ID: %d", m.gc, m.displayWindow)
+	logger.WithComponent("display").Debug().
+		Uint32("gc_id", uint32(m.gc)).
+		Uint32("window_id", uint32(m.displayWindow)).
+		Msg("Created graphics context ID")
 
 	err = xproto.CreateGCChecked(
 		m.conn,
@@ -152,10 +159,14 @@ func (m *Manager) Start() error {
 
 	// Sync to ensure GC is fully created on server
 	m.conn.Sync()
-	log.Printf("GC created successfully")
+	logger.WithComponent("display").Debug().Msg("Graphics context created successfully")
 
 	m.running = true
-	log.Printf("Virtual display window created: %dx%d (Window ID: %d)", m.width, m.height, m.displayWindow)
+	logger.WithComponent("display").Info().
+		Int("width", m.width).
+		Int("height", m.height).
+		Uint32("window_id", uint32(m.displayWindow)).
+		Msg("Virtual display window created")
 
 	return nil
 }
@@ -182,7 +193,7 @@ func (m *Manager) Stop() {
 	}
 
 	m.running = false
-	log.Println("Virtual display window closed")
+	logger.WithComponent("display").Info().Msg("Virtual display window closed")
 }
 
 // IsRunning returns whether the display is currently running
@@ -262,7 +273,11 @@ func (m *Manager) ClearDisplay() error {
 
 // captureWindow captures a window's content as an image
 func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply) (*image.RGBA, error) {
-	log.Printf("Display capture: window=%d, size=%dx%d", win, geom.Width, geom.Height)
+	logger.WithComponent("display").Debug().
+		Uint32("window_id", uint32(win)).
+		Uint16("width", geom.Width).
+		Uint16("height", geom.Height).
+		Msg("Display capture")
 
 	// Get window image data
 	reply, err := xproto.GetImage(
@@ -285,10 +300,16 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 	data := reply.Data
 	depth := int(m.screen.RootDepth)
 
-	log.Printf("Display capture: got %d bytes, depth=%d, expected=%d", len(data), depth, int(geom.Width)*int(geom.Height)*4)
+	logger.WithComponent("display").Debug().
+		Int("bytes", len(data)).
+		Int("depth", depth).
+		Int("expected", int(geom.Width)*int(geom.Height)*4).
+		Msg("Display capture data received")
 
 	if len(data) == 0 {
-		log.Printf("WARNING: Display capture returned empty data for window %d", win)
+		logger.WithComponent("display").Warn().
+			Uint32("window_id", uint32(win)).
+			Msg("Display capture returned empty data")
 		return img, nil
 	}
 
@@ -308,7 +329,10 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 			}
 		}
 	} else {
-		log.Printf("WARNING: Unsupported color depth %d for window %d", depth, win)
+		logger.WithComponent("display").Warn().
+			Int("depth", depth).
+			Uint32("window_id", uint32(win)).
+			Msg("Unsupported color depth")
 	}
 
 	return img, nil
@@ -380,7 +404,7 @@ func (m *Manager) putImage(img *image.RGBA) error {
 	imgWidth := bounds.Dx()
 	imgHeight := bounds.Dy()
 
-	log.Printf("putImage: img size=%dx%d, display size=%dx%d, pix len=%d",
+	logger.WithComponent("display").Debug().Msgf("putImage: img size=%dx%d, display size=%dx%d, pix len=%d",
 		imgWidth, imgHeight, m.width, m.height, len(img.Pix))
 
 	if imgWidth != m.width || imgHeight != m.height {
@@ -399,7 +423,7 @@ func (m *Manager) putImage(img *image.RGBA) error {
 		if format.Depth == depth {
 			bitsPerPixel = format.BitsPerPixel
 			scanlinePad = format.ScanlinePad
-			log.Printf("putImage: found format for depth %d: bitsPerPixel=%d, scanlinePad=%d",
+			logger.WithComponent("display").Debug().Msgf("putImage: found format for depth %d: bitsPerPixel=%d, scanlinePad=%d",
 				depth, bitsPerPixel, scanlinePad)
 			break
 		}
@@ -418,7 +442,7 @@ func (m *Manager) putImage(img *image.RGBA) error {
 	padBytes := int(scanlinePad) / 8
 	stride := ((unpadded + padBytes - 1) / padBytes) * padBytes
 
-	log.Printf("putImage: bytesPerPixel=%d, unpadded=%d, stride=%d, total=%d",
+	logger.WithComponent("display").Debug().Msgf("putImage: bytesPerPixel=%d, unpadded=%d, stride=%d, total=%d",
 		bytesPerPixel, unpadded, stride, stride*imgHeight)
 
 	// Allocate buffer with proper stride
@@ -475,7 +499,7 @@ func (m *Manager) putImage(img *image.RGBA) error {
 	}
 	defer xproto.FreeGC(m.conn, testGc)
 
-	log.Printf("putImage: using test GC %d instead of persistent GC %d", testGc, m.gc)
+	logger.WithComponent("display").Debug().Msgf("putImage: using test GC %d instead of persistent GC %d", testGc, m.gc)
 
 	// Put image to window using test GC
 	err = xproto.PutImageChecked(
@@ -569,7 +593,10 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
 
-	log.Printf("Display update loop started at %d FPS (%v interval)", m.fps, updateInterval)
+	logger.WithComponent("display").Info().
+		Int("fps", m.fps).
+		Dur("interval", updateInterval).
+		Msg("Display update loop started")
 
 	var lastWindowID uint32
 
@@ -587,7 +614,7 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 			// If no window or not allowlisted, clear display
 			if window == nil {
 				if lastWindowID != 0 {
-					log.Printf("UpdateLoop: no focused window, clearing display")
+					logger.WithComponent("display").Debug().Msg("No focused window, clearing display")
 					m.ClearDisplay()
 					lastWindowID = 0
 				}
@@ -596,7 +623,10 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 
 			if !isAllowlisted(window) {
 				if lastWindowID != 0 {
-					log.Printf("UpdateLoop: window '%s' (class=%s) not allowlisted, clearing display", window.Title, window.Class)
+					logger.WithComponent("display").Debug().
+						Str("title", window.Title).
+						Str("class", window.Class).
+						Msg("Window not allowlisted, clearing display")
 					m.ClearDisplay()
 					lastWindowID = 0
 				}
@@ -605,9 +635,9 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 
 			// If window changed, render it
 			if window.ID != lastWindowID {
-				log.Printf("UpdateLoop: rendering allowlisted window '%s' (class=%s, id=%d)", window.Title, window.Class, window.ID)
+				logger.WithComponent("display").Debug().Msgf("UpdateLoop: rendering allowlisted window '%s' (class=%s, id=%d)", window.Title, window.Class, window.ID)
 				if err := m.RenderWindow(window.ID); err != nil {
-					log.Printf("Failed to render window %d: %v", window.ID, err)
+					logger.WithComponent("display").Debug().Msgf("Failed to render window %d: %v", window.ID, err)
 					m.ClearDisplay()
 					lastWindowID = 0
 				} else {
@@ -616,7 +646,10 @@ func (m *Manager) UpdateLoop(getCurrentWindow func() *config.WindowInfo, isAllow
 			} else {
 				// Periodically refresh the same window
 				if err := m.RenderWindow(window.ID); err != nil {
-					log.Printf("Failed to refresh window %d: %v", window.ID, err)
+					logger.WithComponent("display").Error().
+						Err(err).
+						Uint32("window_id", window.ID).
+						Msg("Failed to refresh window")
 				}
 			}
 		}

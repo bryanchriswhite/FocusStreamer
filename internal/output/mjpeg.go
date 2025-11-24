@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-	"log"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 )
 
 // MJPEGOutput streams frames as Motion JPEG over HTTP
@@ -54,7 +55,7 @@ func (m *MJPEGOutput) Start() error {
 	m.startTime = time.Now()
 	m.frameCount = 0
 
-	log.Printf("[MJPEG] Output started: %dx%d @ %d FPS", m.config.Width, m.config.Height, m.config.FPS)
+	logger.WithComponent("overlay").Info().Msgf("[MJPEG] Output started: %dx%d @ %d FPS", m.config.Width, m.config.Height, m.config.FPS)
 	return nil
 }
 
@@ -77,7 +78,7 @@ func (m *MJPEGOutput) Stop() error {
 	m.clients = make(map[chan []byte]struct{})
 	m.clientsMu.Unlock()
 
-	log.Printf("[MJPEG] Output stopped after %v frames", m.frameCount)
+	logger.WithComponent("overlay").Info().Msgf("[MJPEG] Output stopped after %v frames", m.frameCount)
 	return nil
 }
 
@@ -150,7 +151,7 @@ func (m *MJPEGOutput) GetHTTPHandler() http.HandlerFunc {
 		clientCount := len(m.clients)
 		m.clientsMu.Unlock()
 
-		log.Printf("[MJPEG] New client connected (total: %d)", clientCount)
+		logger.WithComponent("overlay").Info().Msgf("[MJPEG] New client connected (total: %d)", clientCount)
 
 		// Cleanup on disconnect
 		defer func() {
@@ -158,7 +159,7 @@ func (m *MJPEGOutput) GetHTTPHandler() http.HandlerFunc {
 			delete(m.clients, frameChan)
 			clientCount := len(m.clients)
 			m.clientsMu.Unlock()
-			log.Printf("[MJPEG] Client disconnected (remaining: %d)", clientCount)
+			logger.WithComponent("overlay").Info().Msgf("[MJPEG] Client disconnected (remaining: %d)", clientCount)
 		}()
 
 		// Stream frames to client

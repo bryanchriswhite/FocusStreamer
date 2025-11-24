@@ -7,11 +7,11 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
@@ -252,7 +252,7 @@ func (w *GitHubWidget) UpdateConfig(config map[string]interface{}) error {
 func (w *GitHubWidget) pollStatus() {
 	// Initial fetch
 	if err := w.fetchStatus(); err != nil {
-		log.Printf("[GitHubWidget %s] Initial fetch failed: %v", w.id, err)
+		logger.WithComponent("overlay").Info().Msgf("[GitHubWidget %s] Initial fetch failed: %v", w.id, err)
 	}
 
 	ticker := time.NewTicker(w.pollInterval)
@@ -264,7 +264,7 @@ func (w *GitHubWidget) pollStatus() {
 			return
 		case <-ticker.C:
 			if err := w.fetchStatus(); err != nil {
-				log.Printf("[GitHubWidget %s] Failed to fetch status: %v", w.id, err)
+				logger.WithComponent("overlay").Info().Msgf("[GitHubWidget %s] Failed to fetch status: %v", w.id, err)
 			}
 		}
 	}
@@ -320,7 +320,7 @@ func (w *GitHubWidget) fetchStatus() error {
 		w.status = run.Status
 		w.conclusion = run.Conclusion
 		w.lastUpdate = time.Now()
-		log.Printf("[GitHubWidget %s] Updated status: %s/%s", w.id, w.status, w.conclusion)
+		logger.WithComponent("overlay").Info().Msgf("[GitHubWidget %s] Updated status: %s/%s", w.id, w.status, w.conclusion)
 	} else {
 		w.status = "no_runs"
 		w.conclusion = ""

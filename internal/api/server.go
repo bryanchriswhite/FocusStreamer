@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/display"
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	"github.com/bryanchriswhite/FocusStreamer/internal/overlay"
 	"github.com/bryanchriswhite/FocusStreamer/internal/window"
@@ -103,16 +103,16 @@ func (s *Server) createStaticHandler() http.Handler {
 
 	// Get absolute path for better debugging
 	absPath, _ := filepath.Abs(webDistPath)
-	log.Printf("Looking for web UI at: %s", absPath)
+	logger.WithComponent("overlay").Info().Msgf("Looking for web UI at: %s", absPath)
 
 	// Check if the directory exists
 	if _, err := os.Stat(webDistPath); os.IsNotExist(err) {
-		log.Printf("Warning: web/dist directory not found at %s", absPath)
-		log.Printf("Serving fallback HTML. To see the React UI, run from project root: cd /path/to/FocusStreamer && ./build/focusstreamer serve")
+		logger.WithComponent("overlay").Info().Msgf("Warning: web/dist directory not found at %s", absPath)
+		logger.WithComponent("overlay").Info().Msgf("Serving fallback HTML. To see the React UI, run from project root: cd /path/to/FocusStreamer && ./build/focusstreamer serve")
 		return http.HandlerFunc(s.handleFallbackIndex)
 	}
 
-	log.Printf("✅ Found web UI build at: %s", absPath)
+	logger.WithComponent("overlay").Info().Msgf("✅ Found web UI build at: %s", absPath)
 
 	// Create file server for the dist directory
 	fileServer := http.FileServer(http.Dir(webDistPath))
@@ -143,7 +143,7 @@ func (s *Server) createStaticHandler() http.Handler {
 // Start starts the HTTP server
 func (s *Server) Start(port int) error {
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("Starting server on http://localhost%s\n", addr)
+	logger.WithComponent("overlay").Info().Msgf("Starting server on http://localhost%s\n", addr)
 	return http.ListenAndServe(addr, s.enableCORS(s.router))
 }
 
@@ -201,20 +201,20 @@ func (s *Server) handleAddToAllowlist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Error decoding add allowlist request: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error decoding add allowlist request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("API: Adding '%s' to allowlist", req.AppClass)
+	logger.WithComponent("overlay").Info().Msgf("API: Adding '%s' to allowlist", req.AppClass)
 
 	if err := s.configMgr.AddAllowlistedApp(req.AppClass); err != nil {
-		log.Printf("Error adding to allowlist: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error adding to allowlist: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("API: Successfully added '%s' to allowlist", req.AppClass)
+	logger.WithComponent("overlay").Info().Msgf("API: Successfully added '%s' to allowlist", req.AppClass)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
@@ -224,15 +224,15 @@ func (s *Server) handleRemoveFromAllowlist(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	appClass := vars["id"]
 
-	log.Printf("API: Removing '%s' from allowlist", appClass)
+	logger.WithComponent("overlay").Info().Msgf("API: Removing '%s' from allowlist", appClass)
 
 	if err := s.configMgr.RemoveAllowlistedApp(appClass); err != nil {
-		log.Printf("Error removing from allowlist: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error removing from allowlist: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("API: Successfully removed '%s' from allowlist", appClass)
+	logger.WithComponent("overlay").Info().Msgf("API: Successfully removed '%s' from allowlist", appClass)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
@@ -252,7 +252,7 @@ func (s *Server) handleGetCurrentWindow(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleWindowStream(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v\n", err)
+		logger.WithComponent("overlay").Info().Msgf("WebSocket upgrade error: %v\n", err)
 		return
 	}
 	defer conn.Close()
@@ -264,7 +264,7 @@ func (s *Server) handleWindowStream(w http.ResponseWriter, r *http.Request) {
 	// Send initial window
 	if current := s.windowMgr.GetCurrentWindow(); current != nil {
 		if err := conn.WriteJSON(current); err != nil {
-			log.Printf("WebSocket write error: %v\n", err)
+			logger.WithComponent("overlay").Info().Msgf("WebSocket write error: %v\n", err)
 			return
 		}
 	}
@@ -272,7 +272,7 @@ func (s *Server) handleWindowStream(w http.ResponseWriter, r *http.Request) {
 	// Stream updates
 	for window := range updates {
 		if err := conn.WriteJSON(window); err != nil {
-			log.Printf("WebSocket write error: %v\n", err)
+			logger.WithComponent("overlay").Info().Msgf("WebSocket write error: %v\n", err)
 			return
 		}
 	}
@@ -282,12 +282,12 @@ func (s *Server) handleGetWindowScreenshot(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	windowClass := vars["id"]
 
-	log.Printf("Screenshot requested for window class: %s", windowClass)
+	logger.WithComponent("overlay").Info().Msgf("Screenshot requested for window class: %s", windowClass)
 
 	// Find window by class
 	window, err := s.windowMgr.FindWindowByClass(windowClass)
 	if err != nil {
-		log.Printf("Window not found: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Window not found: %v", err)
 		http.Error(w, "Window not found", http.StatusNotFound)
 		return
 	}
@@ -295,12 +295,12 @@ func (s *Server) handleGetWindowScreenshot(w http.ResponseWriter, r *http.Reques
 	// Capture screenshot using window manager
 	pngData, err := s.windowMgr.CaptureWindowScreenshot(window.ID)
 	if err != nil {
-		log.Printf("Failed to capture screenshot: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Failed to capture screenshot: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to capture screenshot: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Successfully captured screenshot for %s (%d bytes)", windowClass, len(pngData))
+	logger.WithComponent("overlay").Info().Msgf("Successfully captured screenshot for %s (%d bytes)", windowClass, len(pngData))
 
 	// Return PNG image
 	w.Header().Set("Content-Type", "image/png")
@@ -507,7 +507,7 @@ func (s *Server) handleGetWidgetInstances(w http.ResponseWriter, r *http.Request
 func (s *Server) handleCreateWidget(w http.ResponseWriter, r *http.Request) {
 	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Error decoding create widget request: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error decoding create widget request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -524,30 +524,30 @@ func (s *Server) handleCreateWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("API: Creating widget: %s (type: %s)", widgetID, widgetType)
+	logger.WithComponent("overlay").Info().Msgf("API: Creating widget: %s (type: %s)", widgetID, widgetType)
 
 	// Create widget
 	widget, err := s.overlayMgr.CreateWidget(widgetType, widgetID, req)
 	if err != nil {
-		log.Printf("Error creating widget: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error creating widget: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Add to manager
 	if err := s.overlayMgr.AddWidget(widget); err != nil {
-		log.Printf("Error adding widget: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error adding widget: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Update config to persist
 	if err := s.saveOverlayConfig(); err != nil {
-		log.Printf("Error saving overlay config: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error saving overlay config: %v", err)
 		// Don't fail the request, widget is already added
 	}
 
-	log.Printf("API: Successfully created widget: %s", widgetID)
+	logger.WithComponent("overlay").Info().Msgf("API: Successfully created widget: %s", widgetID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(widget.GetConfig())
@@ -559,22 +559,22 @@ func (s *Server) handleUpdateWidget(w http.ResponseWriter, r *http.Request) {
 
 	var config map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
-		log.Printf("Error decoding update widget request: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error decoding update widget request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("API: Updating widget: %s", widgetID)
+	logger.WithComponent("overlay").Info().Msgf("API: Updating widget: %s", widgetID)
 
 	if err := s.overlayMgr.UpdateWidget(widgetID, config); err != nil {
-		log.Printf("Error updating widget: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error updating widget: %v", err)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
 	// Update config to persist
 	if err := s.saveOverlayConfig(); err != nil {
-		log.Printf("Error saving overlay config: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error saving overlay config: %v", err)
 		// Don't fail the request, widget is already updated
 	}
 
@@ -585,7 +585,7 @@ func (s *Server) handleUpdateWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("API: Successfully updated widget: %s", widgetID)
+	logger.WithComponent("overlay").Info().Msgf("API: Successfully updated widget: %s", widgetID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(widget.GetConfig())
@@ -595,21 +595,21 @@ func (s *Server) handleDeleteWidget(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	widgetID := vars["id"]
 
-	log.Printf("API: Deleting widget: %s", widgetID)
+	logger.WithComponent("overlay").Info().Msgf("API: Deleting widget: %s", widgetID)
 
 	if err := s.overlayMgr.RemoveWidget(widgetID); err != nil {
-		log.Printf("Error removing widget: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error removing widget: %v", err)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
 	// Update config to persist
 	if err := s.saveOverlayConfig(); err != nil {
-		log.Printf("Error saving overlay config: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error saving overlay config: %v", err)
 		// Don't fail the request, widget is already removed
 	}
 
-	log.Printf("API: Successfully deleted widget: %s", widgetID)
+	logger.WithComponent("overlay").Info().Msgf("API: Successfully deleted widget: %s", widgetID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
@@ -621,12 +621,12 @@ func (s *Server) handleSetOverlayEnabled(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Error decoding set overlay enabled request: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error decoding set overlay enabled request: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("API: Setting overlay enabled: %v", req.Enabled)
+	logger.WithComponent("overlay").Info().Msgf("API: Setting overlay enabled: %v", req.Enabled)
 
 	s.overlayMgr.SetEnabled(req.Enabled)
 
@@ -634,11 +634,11 @@ func (s *Server) handleSetOverlayEnabled(w http.ResponseWriter, r *http.Request)
 	cfg := s.configMgr.Get()
 	cfg.Overlay.Enabled = req.Enabled
 	if err := s.configMgr.Update(cfg); err != nil {
-		log.Printf("Error saving config: %v", err)
+		logger.WithComponent("overlay").Info().Msgf("Error saving config: %v", err)
 		// Don't fail the request, overlay state is already updated
 	}
 
-	log.Printf("API: Successfully set overlay enabled: %v", req.Enabled)
+	logger.WithComponent("overlay").Info().Msgf("API: Successfully set overlay enabled: %v", req.Enabled)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

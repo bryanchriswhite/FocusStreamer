@@ -7,7 +7,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/BurntSushi/xgb/composite"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
 	"github.com/bryanchriswhite/FocusStreamer/internal/overlay"
 	xdraw "golang.org/x/image/draw"
@@ -60,11 +60,13 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 	// Initialize composite extension
 	compositeEnabled := false
 	if err := composite.Init(conn); err != nil {
-		log.Printf("Warning: Composite extension not available: %v", err)
-		log.Printf("Window screenshots may fail for obscured or off-screen windows")
+		logger.WithComponent("window").Warn().
+			Err(err).
+			Msg("Composite extension not available - window screenshots may fail for obscured or off-screen windows")
 	} else {
 		compositeEnabled = true
-		log.Printf("Composite extension initialized successfully")
+		logger.WithComponent("window").Info().
+			Msg("Composite extension initialized successfully")
 	}
 
 	m := &Manager{
@@ -99,7 +101,9 @@ func (m *Manager) Start() error {
 
 	// Get initial focused window
 	if err := m.updateCurrentWindow(); err != nil {
-		fmt.Printf("Warning: failed to get initial window: %v\n", err)
+		logger.WithComponent("window").Warn().
+			Err(err).
+			Msg("Failed to get initial window")
 	}
 
 	return nil
@@ -122,7 +126,9 @@ func (m *Manager) monitorFocus() {
 			return
 		case <-ticker.C:
 			if err := m.updateCurrentWindow(); err != nil {
-				fmt.Printf("Error updating window: %v\n", err)
+				logger.WithComponent("window").Error().
+					Err(err).
+					Msg("Failed to update window")
 			}
 		}
 	}
@@ -383,11 +389,17 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 		return nil, fmt.Errorf("failed to get window attributes: %w", err)
 	}
 
-	log.Printf("Window %d attributes: class=%d, mapState=%d", windowID, attrs.Class, attrs.MapState)
+	logger.WithComponent("window").Debug().
+		Uint32("window_id", uint32(windowID)).
+		Uint16("class", attrs.Class).
+		Uint8("map_state", attrs.MapState).
+		Msg("Window attributes")
 
 	// If window is not suitable for capture, try to find a suitable child window
 	if attrs.Class != xproto.WindowClassInputOutput || attrs.MapState != xproto.MapStateViewable {
-		log.Printf("Window %d not directly capturable, searching for child windows...", windowID)
+		logger.WithComponent("window").Debug().
+			Uint32("window_id", uint32(windowID)).
+			Msg("Window not directly capturable, searching for child windows")
 
 		// Try to find a child window that can be captured
 		childWin, err := m.findCapturableChild(win)
@@ -395,7 +407,9 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 			return nil, fmt.Errorf("no capturable window found: %w", err)
 		}
 
-		log.Printf("Found capturable child window: %d", childWin)
+		logger.WithComponent("window").Debug().
+			Uint32("child_window_id", uint32(childWin)).
+			Msg("Found capturable child window")
 		win = childWin
 
 		// Get attributes of child window
@@ -403,7 +417,11 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child window attributes: %w", err)
 		}
-		log.Printf("Child window %d attributes: class=%d, mapState=%d", win, attrs.Class, attrs.MapState)
+		logger.WithComponent("window").Debug().
+			Uint32("window_id", uint32(win)).
+			Uint16("class", attrs.Class).
+			Uint8("map_state", attrs.MapState).
+			Msg("Child window attributes")
 	}
 
 	// Get window geometry
@@ -412,7 +430,13 @@ func (m *Manager) CaptureWindowScreenshot(windowID uint32) ([]byte, error) {
 		return nil, fmt.Errorf("failed to get window geometry: %w", err)
 	}
 
-	log.Printf("Window %d geometry: %dx%d at (%d,%d)", win, geom.Width, geom.Height, geom.X, geom.Y)
+	logger.WithComponent("window").Debug().
+		Uint32("window_id", uint32(win)).
+		Uint16("width", geom.Width).
+		Uint16("height", geom.Height).
+		Int16("x", geom.X).
+		Int16("y", geom.Y).
+		Msg("Window geometry")
 
 	// Capture window image
 	img, err := m.captureWindow(win, geom)
@@ -437,33 +461,51 @@ func (m *Manager) findCapturableChild(parent xproto.Window) (xproto.Window, erro
 		return 0, fmt.Errorf("failed to query tree: %w", err)
 	}
 
-	log.Printf("Window %d has %d children", parent, len(tree.Children))
+	logger.WithComponent("window").Debug().
+		Uint32("parent_window_id", uint32(parent)).
+		Int("child_count", len(tree.Children)).
+		Msg("Searching child windows")
 
 	// Search through children for a capturable window
 	for _, child := range tree.Children {
 		attrs, err := xproto.GetWindowAttributes(m.conn, child).Reply()
 		if err != nil {
-			log.Printf("  Child %d: failed to get attributes: %v", child, err)
+			logger.WithComponent("window").Debug().
+				Uint32("child_id", uint32(child)).
+				Err(err).
+				Msg("Failed to get child attributes")
 			continue
 		}
 
 		geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(child)).Reply()
 		if err != nil {
-			log.Printf("  Child %d: failed to get geometry: %v", child, err)
+			logger.WithComponent("window").Debug().
+				Uint32("child_id", uint32(child)).
+				Err(err).
+				Msg("Failed to get child geometry")
 			continue
 		}
 
-		log.Printf("  Child %d: class=%d, mapState=%d, size=%dx%d",
-			child, attrs.Class, attrs.MapState, geom.Width, geom.Height)
+		logger.WithComponent("window").Debug().
+			Uint32("child_id", uint32(child)).
+			Uint16("class", attrs.Class).
+			Uint8("map_state", attrs.MapState).
+			Uint16("width", geom.Width).
+			Uint16("height", geom.Height).
+			Msg("Evaluating child window")
 
 		// Check if this child is capturable
 		if attrs.Class == xproto.WindowClassInputOutput && attrs.MapState == xproto.MapStateViewable {
 			// Must have reasonable dimensions
 			if geom.Width > 10 && geom.Height > 10 {
-				log.Printf("  -> Found capturable child: %d", child)
+				logger.WithComponent("window").Debug().
+					Uint32("child_id", uint32(child)).
+					Msg("Found capturable child")
 				return child, nil
 			} else {
-				log.Printf("  -> Too small (need >10x10)")
+				logger.WithComponent("window").Debug().
+					Uint32("child_id", uint32(child)).
+					Msg("Child too small (need >10x10)")
 			}
 		} else {
 			reasons := []string{}
@@ -473,7 +515,10 @@ func (m *Manager) findCapturableChild(parent xproto.Window) (xproto.Window, erro
 			if attrs.MapState != xproto.MapStateViewable {
 				reasons = append(reasons, fmt.Sprintf("mapState=%d (need %d)", attrs.MapState, xproto.MapStateViewable))
 			}
-			log.Printf("  -> Not capturable: %v", reasons)
+			logger.WithComponent("window").Debug().
+				Uint32("child_id", uint32(child)).
+				Strs("reasons", reasons).
+				Msg("Child not capturable")
 		}
 
 		// Recursively search this child's children
@@ -495,8 +540,10 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 		// Use CompositeRedirectAutomatic (0) for temporary redirection
 		err := composite.RedirectWindowChecked(m.conn, win, composite.RedirectAutomatic).Check()
 		if err != nil {
-			log.Printf("Warning: Failed to redirect window via Composite: %v", err)
-			log.Printf("Falling back to direct window capture")
+			logger.WithComponent("window").Warn().
+				Err(err).
+				Uint32("window_id", uint32(win)).
+				Msg("Failed to redirect window via Composite, falling back to direct capture")
 			drawable = xproto.Drawable(win)
 		} else {
 			// Ensure we unredirect when done
@@ -505,19 +552,25 @@ func (m *Manager) captureWindow(win xproto.Window, geom *xproto.GetGeometryReply
 			// Create a pixmap ID and associate it with the window's off-screen buffer
 			pixmap, err := xproto.NewPixmapId(m.conn)
 			if err != nil {
-				log.Printf("Warning: Failed to generate pixmap ID: %v", err)
-				log.Printf("Falling back to direct window capture")
+				logger.WithComponent("window").Warn().
+					Err(err).
+					Uint32("window_id", uint32(win)).
+					Msg("Failed to generate pixmap ID, falling back to direct capture")
 				drawable = xproto.Drawable(win)
 			} else {
 				// Associate the pixmap with the window's off-screen buffer
 				err = composite.NameWindowPixmapChecked(m.conn, win, pixmap).Check()
 				if err != nil {
-					log.Printf("Warning: Failed to name window pixmap via Composite: %v", err)
-					log.Printf("Falling back to direct window capture")
+					logger.WithComponent("window").Warn().
+						Err(err).
+						Uint32("window_id", uint32(win)).
+						Msg("Failed to name window pixmap, falling back to direct capture")
 					drawable = xproto.Drawable(win)
 				} else {
 					drawable = xproto.Drawable(pixmap)
-					log.Printf("Using Composite pixmap for window capture")
+					logger.WithComponent("window").Debug().
+						Uint32("window_id", uint32(win)).
+						Msg("Using Composite pixmap for window capture")
 					// Free pixmap when done
 					defer xproto.FreePixmap(m.conn, pixmap)
 				}
@@ -634,7 +687,9 @@ func (m *Manager) StartStreaming(fps int) error {
 
 	go m.streamLoop(fps)
 
-	log.Printf("Started streaming at %d FPS", fps)
+	logger.WithComponent("window").Info().
+		Int("fps", fps).
+		Msg("Started streaming")
 	return nil
 }
 
@@ -649,7 +704,7 @@ func (m *Manager) StopStreaming() {
 
 	close(m.streamStopChan)
 	m.streamRunning = false
-	log.Printf("Stopped streaming")
+	logger.WithComponent("window").Info().Msg("Stopped streaming")
 }
 
 // streamLoop continuously captures and streams the focused window
@@ -694,7 +749,11 @@ func (m *Manager) captureAndStream() {
 		m.streamMu.Lock()
 		m.lastAllowedWindow = currentWin
 		m.streamMu.Unlock()
-		log.Printf("[MJPEG STREAM] Capturing allowlisted window: '%s' (class=%s, id=%d)", currentWin.Title, currentWin.Class, currentWin.ID)
+		logger.WithComponent("stream").Debug().
+			Str("title", currentWin.Title).
+			Str("class", currentWin.Class).
+			Uint32("id", currentWin.ID).
+			Msg("Capturing allowlisted window")
 	} else {
 		// Current window is not allowlisted - use last allowed window if available
 		m.streamMu.Lock()
@@ -704,11 +763,17 @@ func (m *Manager) captureAndStream() {
 		if lastAllowed != nil {
 			// We have a previous allowlisted window - keep streaming it (sticky behavior)
 			windowToCapture = lastAllowed
-			log.Printf("[MJPEG STREAM] Current window '%s' not allowlisted, using sticky window: '%s' (class=%s, id=%d)", currentWin.Title, lastAllowed.Title, lastAllowed.Class, lastAllowed.ID)
+			logger.WithComponent("stream").Debug().
+				Str("current_title", currentWin.Title).
+				Str("sticky_title", lastAllowed.Title).
+				Str("sticky_class", lastAllowed.Class).
+				Uint32("sticky_id", lastAllowed.ID).
+				Msg("Using sticky window (current window not allowlisted)")
 		} else {
 			// No allowlisted window yet - show placeholder
 			usePlaceholder = true
-			log.Printf("[MJPEG STREAM] No allowlisted window available, showing placeholder")
+			logger.WithComponent("stream").Debug().
+				Msg("No allowlisted window available, showing placeholder")
 		}
 	}
 
@@ -748,13 +813,17 @@ func (m *Manager) captureAndStream() {
 	// Apply overlay rendering if overlay manager is set
 	if m.overlayMgr != nil {
 		if err := m.overlayMgr.Render(img); err != nil {
-			log.Printf("Failed to render overlay: %v", err)
+			logger.WithComponent("stream").Error().
+				Err(err).
+				Msg("Failed to render overlay")
 		}
 	}
 
 	// Send to output at native resolution - browser will scale to fit viewport
 	if err := m.output.WriteFrame(img); err != nil {
-		log.Printf("Failed to write frame to output: %v", err)
+		logger.WithComponent("stream").Error().
+			Err(err).
+			Msg("Failed to write frame to output")
 	}
 }
 

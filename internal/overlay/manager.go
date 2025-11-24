@@ -3,8 +3,9 @@ package overlay
 import (
 	"fmt"
 	"image"
-	"log"
 	"sync"
+
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 )
 
 // Manager handles overlay widgets and rendering
@@ -32,7 +33,7 @@ func (m *Manager) AddWidget(widget Widget) error {
 	}
 
 	m.widgets[widget.ID()] = widget
-	log.Printf("[Overlay] Added widget: %s (type: %s)", widget.ID(), widget.Type())
+	logger.WithComponent("overlay").Info().Msgf("[Overlay] Added widget: %s (type: %s)", widget.ID(), widget.Type())
 	return nil
 }
 
@@ -52,7 +53,7 @@ func (m *Manager) RemoveWidget(id string) error {
 	}
 
 	delete(m.widgets, id)
-	log.Printf("[Overlay] Removed widget: %s", id)
+	logger.WithComponent("overlay").Info().Msgf("[Overlay] Removed widget: %s", id)
 	return nil
 }
 
@@ -91,7 +92,7 @@ func (m *Manager) UpdateWidget(id string, config map[string]interface{}) error {
 		return fmt.Errorf("failed to update widget config: %w", err)
 	}
 
-	log.Printf("[Overlay] Updated widget: %s", id)
+	logger.WithComponent("overlay").Info().Msgf("[Overlay] Updated widget: %s", id)
 	return nil
 }
 
@@ -100,7 +101,7 @@ func (m *Manager) SetEnabled(enabled bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.enabled = enabled
-	log.Printf("[Overlay] Overlay %s", map[bool]string{true: "enabled", false: "disabled"}[enabled])
+	logger.WithComponent("overlay").Info().Msgf("[Overlay] Overlay %s", map[bool]string{true: "enabled", false: "disabled"}[enabled])
 }
 
 // IsEnabled returns whether the overlay is enabled
@@ -128,7 +129,7 @@ func (m *Manager) Render(img *image.RGBA) error {
 	for _, widget := range widgets {
 		if widget.IsEnabled() {
 			if err := widget.Render(img); err != nil {
-				log.Printf("[Overlay] Failed to render widget %s: %v", widget.ID(), err)
+				logger.WithComponent("overlay").Info().Msgf("[Overlay] Failed to render widget %s: %v", widget.ID(), err)
 			}
 		}
 	}
@@ -162,24 +163,24 @@ func (m *Manager) LoadFromConfig(configs []map[string]interface{}) error {
 	for _, config := range configs {
 		widgetType, ok := config["type"].(string)
 		if !ok {
-			log.Printf("[Overlay] Skipping widget with missing type")
+			logger.WithComponent("overlay").Info().Msgf("[Overlay] Skipping widget with missing type")
 			continue
 		}
 
 		id, ok := config["id"].(string)
 		if !ok {
-			log.Printf("[Overlay] Skipping widget with missing ID")
+			logger.WithComponent("overlay").Info().Msgf("[Overlay] Skipping widget with missing ID")
 			continue
 		}
 
 		widget, err := m.CreateWidget(widgetType, id, config)
 		if err != nil {
-			log.Printf("[Overlay] Failed to create widget %s: %v", id, err)
+			logger.WithComponent("overlay").Info().Msgf("[Overlay] Failed to create widget %s: %v", id, err)
 			continue
 		}
 
 		if err := m.AddWidget(widget); err != nil {
-			log.Printf("[Overlay] Failed to add widget %s: %v", id, err)
+			logger.WithComponent("overlay").Info().Msgf("[Overlay] Failed to add widget %s: %v", id, err)
 		}
 	}
 
@@ -212,7 +213,7 @@ func (m *Manager) Clear() {
 	}
 
 	m.widgets = make(map[string]Widget)
-	log.Printf("[Overlay] Cleared all widgets")
+	logger.WithComponent("overlay").Info().Msgf("[Overlay] Cleared all widgets")
 }
 
 // GetAvailableWidgetTypes returns a list of available widget types

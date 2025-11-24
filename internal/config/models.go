@@ -2,11 +2,11 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 	"github.com/spf13/viper"
 )
 
@@ -113,7 +113,9 @@ func NewManager(configFile string) (*Manager, error) {
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// Config file not found, create it with defaults
-			log.Printf("Config file not found, creating new config at: %s", m.configPath)
+			logger.WithComponent("config").Info().
+				Str("path", m.configPath).
+				Msg("Config file not found, creating new config")
 			if err := m.Save(); err != nil {
 				return nil, fmt.Errorf("failed to create default config: %w", err)
 			}
@@ -123,8 +125,11 @@ func NewManager(configFile string) (*Manager, error) {
 	} else {
 		// Config loaded successfully - log what was loaded
 		loadedApps := v.GetStringMap("allowlisted_apps")
-		log.Printf("Config loaded from: %s", m.configPath)
-		log.Printf("Loaded %d allowlisted apps: %v", len(loadedApps), loadedApps)
+		logger.WithComponent("config").Info().
+			Str("path", m.configPath).
+			Int("allowlisted_count", len(loadedApps)).
+			Interface("allowlisted_apps", loadedApps).
+			Msg("Config loaded successfully")
 	}
 
 	return m, nil
@@ -183,25 +188,35 @@ func (m *Manager) Get() *Config {
 
 // Save saves the current configuration to disk
 func (m *Manager) Save() error {
-	log.Printf("Saving config to: %s", m.configPath)
-
-	// Debug: log what we're trying to save
 	allowlistedApps := m.v.GetStringMap("allowlisted_apps")
-	log.Printf("Config contains %d allowlisted apps: %v", len(allowlistedApps), allowlistedApps)
+
+	logger.WithComponent("config").Debug().
+		Str("path", m.configPath).
+		Int("allowlisted_count", len(allowlistedApps)).
+		Interface("allowlisted_apps", allowlistedApps).
+		Msg("Saving config")
 
 	// Ensure the directory exists for the config file
 	configDir := filepath.Dir(m.configPath)
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		log.Printf("Error creating config directory %s: %v", configDir, err)
+		logger.WithComponent("config").Error().
+			Err(err).
+			Str("config_dir", configDir).
+			Msg("Failed to create config directory")
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	if err := m.v.WriteConfigAs(m.configPath); err != nil {
-		log.Printf("Error saving config: %v", err)
+		logger.WithComponent("config").Error().
+			Err(err).
+			Str("path", m.configPath).
+			Msg("Failed to save config")
 		return err
 	}
 
-	log.Printf("Config saved successfully")
+	logger.WithComponent("config").Info().
+		Str("path", m.configPath).
+		Msg("Config saved successfully")
 	return nil
 }
 
@@ -220,12 +235,16 @@ func (m *Manager) Update(cfg *Config) error {
 func (m *Manager) AddAllowlistedApp(appClass string) error {
 	// Viper lowercases all map keys, so we must do the same
 	normalizedKey := strings.ToLower(appClass)
-	log.Printf("AddAllowlistedApp called for: %s (normalized: %s)", appClass, normalizedKey)
 
 	// Get existing apps - use map[string]interface{} for Viper compatibility
 	apps := make(map[string]interface{})
 	existingApps := m.v.GetStringMap("allowlisted_apps")
-	log.Printf("Existing allowlisted apps before add: %v", existingApps)
+
+	logger.WithComponent("config").Debug().
+		Str("app_class", appClass).
+		Str("normalized_key", normalizedKey).
+		Int("existing_count", len(existingApps)).
+		Msg("Adding app to allowlist")
 
 	// Copy existing entries
 	for k, v := range existingApps {
@@ -234,19 +253,27 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 
 	// Add new app with normalized key
 	apps[normalizedKey] = true
-	log.Printf("Setting allowlisted_apps to: %v", apps)
 	m.v.Set("allowlisted_apps", apps)
 
 	// Verify the set worked
 	verification := m.v.GetStringMap("allowlisted_apps")
-	log.Printf("Verification after set: %v", verification)
+	logger.WithComponent("config").Debug().
+		Interface("verification", verification).
+		Msg("Verification after set")
 
 	if err := m.Save(); err != nil {
-		log.Printf("Error saving config after adding '%s': %v", appClass, err)
+		logger.WithComponent("config").Error().
+			Err(err).
+			Str("app_class", appClass).
+			Msg("Failed to save config after adding app")
 		return err
 	}
 
-	log.Printf("Successfully added '%s' (key: %s) to allowlist. Total: %d", appClass, normalizedKey, len(apps))
+	logger.WithComponent("config").Info().
+		Str("app_class", appClass).
+		Str("normalized_key", normalizedKey).
+		Int("total_count", len(apps)).
+		Msg("Successfully added app to allowlist")
 	return nil
 }
 
@@ -272,7 +299,11 @@ func (m *Manager) RemoveAllowlistedApp(appClass string) error {
 		return err
 	}
 
-	log.Printf("Removed '%s' (key: %s) from allowlist. Total: %d", appClass, normalizedKey, len(apps))
+	logger.WithComponent("config").Info().
+		Str("app_class", appClass).
+		Str("normalized_key", normalizedKey).
+		Int("total_count", len(apps)).
+		Msg("Removed app from allowlist")
 	return nil
 }
 
