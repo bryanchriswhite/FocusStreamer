@@ -22,12 +22,13 @@ type Application struct {
 
 // WindowInfo represents information about a window
 type WindowInfo struct {
-	ID       uint32   `json:"id" mapstructure:"id"`
-	Title    string   `json:"title" mapstructure:"title"`
-	Class    string   `json:"class" mapstructure:"class"`
-	PID      int      `json:"pid" mapstructure:"pid"`
-	Focused  bool     `json:"focused" mapstructure:"focused"`
-	Geometry Geometry `json:"geometry" mapstructure:"geometry"`
+	ID              uint32   `json:"id" mapstructure:"id"`
+	Title           string   `json:"title" mapstructure:"title"`
+	Class           string   `json:"class" mapstructure:"class"`
+	PID             int      `json:"pid" mapstructure:"pid"`
+	Focused         bool     `json:"focused" mapstructure:"focused"`
+	Geometry        Geometry `json:"geometry" mapstructure:"geometry"`
+	IsNativeWayland bool     `json:"is_native_wayland" mapstructure:"is_native_wayland"` // True for native Wayland windows (no X11 ID)
 }
 
 // Geometry represents window geometry
