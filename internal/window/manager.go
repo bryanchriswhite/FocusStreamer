@@ -687,8 +687,27 @@ func (m *Manager) captureAndStream() {
 		m.streamMu.Unlock()
 
 		if lastAllowed != nil {
-			// We have a previous allowlisted window - keep streaming it (sticky behavior)
-			windowToCapture = lastAllowed
+			// Check if the last allowed window is the SAME window as current (e.g., browser tab changed)
+			// If same window but title changed and no longer matches, clear it
+			if lastAllowed.ID == currentWin.ID {
+				// Same window but title changed to non-matching - clear last allowed
+				m.streamMu.Lock()
+				m.lastAllowedWindow = nil
+				m.streamMu.Unlock()
+				usePlaceholder = true
+			} else {
+				// Different window - re-verify the last allowed window is still allowlisted
+				// (its title might have changed)
+				if m.IsWindowAllowlisted(lastAllowed) {
+					windowToCapture = lastAllowed
+				} else {
+					// Last allowed window no longer matches - clear it
+					m.streamMu.Lock()
+					m.lastAllowedWindow = nil
+					m.streamMu.Unlock()
+					usePlaceholder = true
+				}
+			}
 		} else {
 			// No allowlisted window yet - show placeholder
 			usePlaceholder = true
