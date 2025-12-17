@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/composite"
 	"github.com/BurntSushi/xgb/xproto"
+	"github.com/bryanchriswhite/FocusStreamer/internal/capture"
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 	"github.com/bryanchriswhite/FocusStreamer/internal/output"
@@ -25,32 +27,51 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// Manager handles X11 window detection and monitoring
+// Manager handles window detection and monitoring
 type Manager struct {
+	// Backend for window discovery (X11 or KWin)
+	backend Backend
+
+	// Capture router for X11/PipeWire capture
+	captureRouter *capture.Router
+
+	// X11 connection for screenshot capture (needed regardless of backend)
 	conn             *xgb.Conn
 	root             xproto.Window
 	screen           *xproto.ScreenInfo
-	configMgr        *config.Manager
-	currentWindow    *config.WindowInfo
-	mu               sync.RWMutex
-	listeners        []chan *config.WindowInfo
-	stopChan         chan struct{}
 	compositeEnabled bool
 
+	configMgr     *config.Manager
+	currentWindow *config.WindowInfo
+	mu            sync.RWMutex
+	listeners     []chan *config.WindowInfo
+	stopChan      chan struct{}
+
 	// Output for streaming frames
-	output              output.Output
-	overlayMgr          *overlay.Manager
-	streamStopChan      chan struct{}
-	streamRunning       bool
-	streamMu            sync.Mutex
-	lastAllowedWindow   *config.WindowInfo // Last allowlisted window to stream
+	output            output.Output
+	overlayMgr        *overlay.Manager
+	streamStopChan    chan struct{}
+	streamRunning     bool
+	streamMu          sync.Mutex
+	lastAllowedWindow *config.WindowInfo // Last allowlisted window to stream
 }
 
-// NewManager creates a new window manager
+// NewManager creates a new window manager with auto-detected backend
 func NewManager(configMgr *config.Manager) (*Manager, error) {
+	log := logger.WithComponent("window-manager")
+
+	// Auto-detect backend
+	backend, err := detectBackend()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect window backend: %w", err)
+	}
+	log.Info().Str("backend", backend.Name()).Msg("Using window backend")
+
+	// Always need X11 connection for screenshot capture
 	conn, err := xgb.NewConn()
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to X server: %w", err)
+		backend.Close()
+		return nil, fmt.Errorf("failed to connect to X server for screenshots: %w", err)
 	}
 
 	setup := xproto.Setup(conn)
@@ -60,16 +81,33 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 	// Initialize composite extension
 	compositeEnabled := false
 	if err := composite.Init(conn); err != nil {
-		logger.WithComponent("window").Warn().
+		log.Warn().
 			Err(err).
 			Msg("Composite extension not available - window screenshots may fail for obscured or off-screen windows")
 	} else {
 		compositeEnabled = true
-		logger.WithComponent("window").Info().
-			Msg("Composite extension initialized successfully")
+		log.Info().Msg("Composite extension initialized successfully")
+	}
+
+	// Initialize capture router
+	captureRouter, err := capture.NewRouter()
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to create capture router")
+	} else {
+		if err := captureRouter.Start(); err != nil {
+			log.Warn().Err(err).Msg("Failed to start capture router")
+			captureRouter = nil
+		} else {
+			log.Info().
+				Bool("has_x11", captureRouter.HasX11()).
+				Bool("has_pipewire", captureRouter.HasPipeWire()).
+				Msg("Capture router initialized")
+		}
 	}
 
 	m := &Manager{
+		backend:          backend,
+		captureRouter:    captureRouter,
 		conn:             conn,
 		root:             root,
 		screen:           screen,
@@ -82,25 +120,48 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 	return m, nil
 }
 
-// Start begins monitoring window focus changes
-func (m *Manager) Start() error {
-	// Subscribe to window focus events
-	const eventMask = xproto.EventMaskPropertyChange | xproto.EventMaskFocusChange
+// detectBackend auto-detects the appropriate window backend
+func detectBackend() (Backend, error) {
+	log := logger.WithComponent("window-manager")
 
-	if err := xproto.ChangeWindowAttributesChecked(
-		m.conn,
-		m.root,
-		xproto.CwEventMask,
-		[]uint32{eventMask},
-	).Check(); err != nil {
-		return fmt.Errorf("failed to set event mask: %w", err)
+	// Check if running on Wayland
+	sessionType := os.Getenv("XDG_SESSION_TYPE")
+	log.Debug().Str("XDG_SESSION_TYPE", sessionType).Msg("Detecting session type")
+
+	if sessionType == "wayland" {
+		// Try KWin backend first
+		log.Info().Msg("Wayland session detected, trying KWin backend")
+		kwin, err := NewKWinBackend()
+		if err == nil {
+			return kwin, nil
+		}
+		log.Warn().Err(err).Msg("KWin backend not available, falling back to X11")
 	}
 
-	// Start monitoring in a goroutine
-	go m.monitorFocus()
+	// Fall back to X11
+	log.Info().Msg("Using X11 backend")
+	return NewX11Backend()
+}
+
+// Start begins monitoring window focus changes
+func (m *Manager) Start() error {
+	// Use backend for focus monitoring
+	err := m.backend.WatchFocus(func(info *config.WindowInfo) {
+		m.mu.Lock()
+		m.currentWindow = info
+		m.mu.Unlock()
+		m.notifyListeners(info)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start focus monitoring: %w", err)
+	}
 
 	// Get initial focused window
-	if err := m.updateCurrentWindow(); err != nil {
+	if info, err := m.backend.GetFocusedWindow(); err == nil {
+		m.mu.Lock()
+		m.currentWindow = info
+		m.mu.Unlock()
+	} else {
 		logger.WithComponent("window").Warn().
 			Err(err).
 			Msg("Failed to get initial window")
@@ -112,160 +173,12 @@ func (m *Manager) Start() error {
 // Stop stops the window manager
 func (m *Manager) Stop() {
 	close(m.stopChan)
+	m.backend.StopWatching()
+	m.backend.Close()
+	if m.captureRouter != nil {
+		m.captureRouter.Stop()
+	}
 	m.conn.Close()
-}
-
-// monitorFocus monitors window focus changes
-func (m *Manager) monitorFocus() {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.stopChan:
-			return
-		case <-ticker.C:
-			if err := m.updateCurrentWindow(); err != nil {
-				logger.WithComponent("window").Error().
-					Err(err).
-					Msg("Failed to update window")
-			}
-		}
-	}
-}
-
-// updateCurrentWindow updates the currently focused window
-func (m *Manager) updateCurrentWindow() error {
-	focusReply, err := xproto.GetInputFocus(m.conn).Reply()
-	if err != nil {
-		return err
-	}
-
-	focusWindow := focusReply.Focus
-
-	// Get window information
-	windowInfo, err := m.getWindowInfo(focusWindow)
-	if err != nil {
-		return err
-	}
-
-	// Check if window changed
-	m.mu.Lock()
-	changed := m.currentWindow == nil || m.currentWindow.ID != windowInfo.ID
-	m.currentWindow = windowInfo
-	m.mu.Unlock()
-
-	// Notify listeners if window changed
-	if changed {
-		m.notifyListeners(windowInfo)
-	}
-
-	return nil
-}
-
-// getWindowInfo retrieves information about a window
-func (m *Manager) getWindowInfo(win xproto.Window) (*config.WindowInfo, error) {
-	info := &config.WindowInfo{
-		ID:      uint32(win),
-		Focused: true,
-	}
-
-	// Get window geometry
-	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(win)).Reply()
-	if err == nil {
-		info.Geometry = config.Geometry{
-			X:      int(geom.X),
-			Y:      int(geom.Y),
-			Width:  int(geom.Width),
-			Height: int(geom.Height),
-		}
-	}
-
-	// Get window title
-	titleAtom, err := m.getAtom("_NET_WM_NAME")
-	if err == nil {
-		if title, err := m.getProperty(win, titleAtom); err == nil {
-			info.Title = title
-		}
-	}
-
-	// Try alternative title property
-	if info.Title == "" {
-		titleAtom, err = m.getAtom("WM_NAME")
-		if err == nil {
-			if title, err := m.getProperty(win, titleAtom); err == nil {
-				info.Title = title
-			}
-		}
-	}
-
-	// Get window class
-	// WM_CLASS format is: instance\0class\0 (two null-terminated strings)
-	classAtom, err := m.getAtom("WM_CLASS")
-	if err == nil {
-		if classRaw, err := m.getProperty(win, classAtom); err == nil {
-			// Parse WM_CLASS: skip first string (instance), get second string (class)
-			parts := strings.Split(classRaw, "\x00")
-			if len(parts) >= 2 && parts[1] != "" {
-				info.Class = parts[1] // Use the class name (second part)
-			} else if len(parts) >= 1 && parts[0] != "" {
-				info.Class = parts[0] // Fallback to instance if class is empty
-			}
-		}
-	}
-
-	// Get PID
-	pidAtom, err := m.getAtom("_NET_WM_PID")
-	if err == nil {
-		pidReply, err := xproto.GetProperty(
-			m.conn,
-			false,
-			win,
-			pidAtom,
-			xproto.AtomCardinal,
-			0,
-			1,
-		).Reply()
-		if err == nil && len(pidReply.Value) >= 4 {
-			info.PID = int(uint32(pidReply.Value[0]) |
-				uint32(pidReply.Value[1])<<8 |
-				uint32(pidReply.Value[2])<<16 |
-				uint32(pidReply.Value[3])<<24)
-		}
-	}
-
-	return info, nil
-}
-
-// getAtom gets an atom ID by name
-func (m *Manager) getAtom(name string) (xproto.Atom, error) {
-	reply, err := xproto.InternAtom(m.conn, false, uint16(len(name)), name).Reply()
-	if err != nil {
-		return 0, err
-	}
-	return reply.Atom, nil
-}
-
-// getProperty gets a property value as a string
-func (m *Manager) getProperty(win xproto.Window, atom xproto.Atom) (string, error) {
-	reply, err := xproto.GetProperty(
-		m.conn,
-		false,
-		win,
-		atom,
-		xproto.GetPropertyTypeAny,
-		0,
-		(1<<32)-1,
-	).Reply()
-	if err != nil {
-		return "", err
-	}
-
-	if reply.ValueLen == 0 {
-		return "", fmt.Errorf("empty property")
-	}
-
-	return string(reply.Value), nil
 }
 
 // GetCurrentWindow returns the currently focused window
@@ -275,30 +188,9 @@ func (m *Manager) GetCurrentWindow() *config.WindowInfo {
 	return m.currentWindow
 }
 
-// ListWindows returns all visible windows
+// ListWindows returns all visible windows via the backend
 func (m *Manager) ListWindows() ([]*config.WindowInfo, error) {
-	tree, err := xproto.QueryTree(m.conn, m.root).Reply()
-	if err != nil {
-		return nil, err
-	}
-
-	windows := make([]*config.WindowInfo, 0)
-	for _, child := range tree.Children {
-		info, err := m.getWindowInfo(child)
-		if err != nil {
-			continue
-		}
-
-		// Skip windows without titles (usually not user windows)
-		if info.Title == "" {
-			continue
-		}
-
-		info.Focused = false
-		windows = append(windows, info)
-	}
-
-	return windows, nil
+	return m.backend.ListWindows()
 }
 
 // IsWindowAllowlisted checks if a window is allowlisted
@@ -315,12 +207,12 @@ func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
 		}
 	}
 
-	// Check pattern matching
+	// Check pattern matching (matches against both class and title)
 	for _, pattern := range cfg.AllowlistPatterns {
-		if matched, _ := regexp.MatchString(pattern, window.Class); matched {
+		if matched, err := regexp.MatchString(pattern, window.Class); err == nil && matched {
 			return true
 		}
-		if matched, _ := regexp.MatchString(pattern, window.Title); matched {
+		if matched, err := regexp.MatchString(pattern, window.Title); err == nil && matched {
 			return true
 		}
 	}
@@ -630,21 +522,47 @@ func (m *Manager) GetApplications() ([]config.Application, error) {
 		return nil, err
 	}
 
-	// Group windows by class
+	// Group windows by class, track display names from titles
 	appMap := make(map[string]*config.Application)
+	appNames := make(map[string]string) // class -> best display name
+
 	for _, win := range windows {
 		if win.Class == "" {
 			continue
 		}
 
+		// Try to extract a better display name from the window title
+		// Many apps format titles as "Document — AppName" or "Document - AppName"
+		if win.Title != "" {
+			for _, sep := range []string{" — ", " - "} {
+				if idx := strings.LastIndex(win.Title, sep); idx > 0 {
+					potentialName := strings.TrimSpace(win.Title[idx+len(sep):])
+					// Use it if it's reasonable length and not already set
+					if len(potentialName) > 0 && len(potentialName) <= 30 {
+						if _, exists := appNames[win.Class]; !exists {
+							appNames[win.Class] = potentialName
+						}
+						break
+					}
+				}
+			}
+		}
+
 		if _, exists := appMap[win.Class]; !exists {
 			appMap[win.Class] = &config.Application{
 				ID:          win.Class,
-				Name:        win.Class,
+				Name:        win.Class, // Will be updated below
 				WindowClass: win.Class,
 				PID:         win.PID,
-				Allowlisted: m.configMgr.IsAllowlisted(win.Class),
+				Allowlisted: m.IsWindowAllowlisted(win),
 			}
+		}
+	}
+
+	// Update display names with extracted names
+	for class, name := range appNames {
+		if app, exists := appMap[class]; exists {
+			app.Name = name
 		}
 	}
 
@@ -751,11 +669,6 @@ func (m *Manager) captureAndStream() {
 		m.streamMu.Lock()
 		m.lastAllowedWindow = currentWin
 		m.streamMu.Unlock()
-		logger.WithComponent("stream").Debug().
-			Str("title", currentWin.Title).
-			Str("class", currentWin.Class).
-			Uint32("id", currentWin.ID).
-			Msg("Capturing allowlisted window")
 	} else {
 		// Current window is not allowlisted - use last allowed window if available
 		m.streamMu.Lock()
@@ -765,50 +678,64 @@ func (m *Manager) captureAndStream() {
 		if lastAllowed != nil {
 			// We have a previous allowlisted window - keep streaming it (sticky behavior)
 			windowToCapture = lastAllowed
-			logger.WithComponent("stream").Debug().
-				Str("current_title", currentWin.Title).
-				Str("sticky_title", lastAllowed.Title).
-				Str("sticky_class", lastAllowed.Class).
-				Uint32("sticky_id", lastAllowed.ID).
-				Msg("Using sticky window (current window not allowlisted)")
 		} else {
 			// No allowlisted window yet - show placeholder
 			usePlaceholder = true
-			logger.WithComponent("stream").Debug().
-				Msg("No allowlisted window available, showing placeholder")
 		}
 	}
 
 	var img *image.RGBA
+	log := logger.WithComponent("stream")
 
 	if usePlaceholder {
 		// Create and send placeholder frame
 		cfg := m.configMgr.Get()
 		img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
 	} else {
-		// Capture window
-		geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowToCapture.ID)).Reply()
-		if err != nil {
-			// Window might have been closed - clear lastAllowedWindow and send placeholder
+		var err error
+
+		// Try capture router first (supports both X11 and PipeWire)
+		if m.captureRouter != nil && m.captureRouter.CanCapture(windowToCapture) {
+			img, err = m.captureRouter.CaptureWindow(windowToCapture)
+			if err != nil {
+				log.Debug().
+					Uint32("id", windowToCapture.ID).
+					Str("class", windowToCapture.Class).
+					Bool("native_wayland", windowToCapture.IsNativeWayland).
+					Err(err).
+					Msg("Capture router failed, trying fallback")
+			}
+		}
+
+		// Fallback to direct X11 capture if router failed or unavailable
+		if img == nil && !windowToCapture.IsNativeWayland {
+			geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(windowToCapture.ID)).Reply()
+			if err != nil {
+				log.Debug().
+					Uint32("id", windowToCapture.ID).
+					Str("class", windowToCapture.Class).
+					Err(err).
+					Msg("Failed to get window geometry")
+			} else {
+				img, err = m.captureWindow(xproto.Window(windowToCapture.ID), geom)
+				if err != nil {
+					log.Debug().
+						Uint32("id", windowToCapture.ID).
+						Str("class", windowToCapture.Class).
+						Err(err).
+						Msg("Direct X11 capture failed")
+				}
+			}
+		}
+
+		// If capture failed, clear lastAllowedWindow and send placeholder
+		if img == nil {
 			m.streamMu.Lock()
 			m.lastAllowedWindow = nil
 			m.streamMu.Unlock()
 
-			// Send placeholder instead of returning without a frame
 			cfg := m.configMgr.Get()
 			img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
-		} else {
-			img, err = m.captureWindow(xproto.Window(windowToCapture.ID), geom)
-			if err != nil {
-				// Failed to capture - clear lastAllowedWindow and send placeholder
-				m.streamMu.Lock()
-				m.lastAllowedWindow = nil
-				m.streamMu.Unlock()
-
-				// Send placeholder instead of returning without a frame
-				cfg := m.configMgr.Get()
-				img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
-			}
 		}
 	}
 

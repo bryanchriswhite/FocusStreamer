@@ -61,7 +61,7 @@ func main() {
 
 	// Initialize API server
 	log.Println("Initializing HTTP server...")
-	server := api.NewServer(windowMgr, configMgr, nil, mjpegOut)
+	server := api.NewServer(windowMgr, configMgr, nil, mjpegOut, nil)
 
 	// Start server in a goroutine
 	go func() {
