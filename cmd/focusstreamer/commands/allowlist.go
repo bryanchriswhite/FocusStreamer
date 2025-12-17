@@ -93,7 +93,7 @@ func runAllowlistList(cmd *cobra.Command, args []string) error {
 
 	cfg := configMgr.Get()
 
-	fmt.Println("Allowlisted Applications:")
+	fmt.Println("Allowlisted Applications (by class):")
 	if len(cfg.AllowlistedApps) == 0 {
 		fmt.Println("  (none)")
 	} else {
@@ -102,11 +102,20 @@ func runAllowlistList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("\nAllowlist Patterns:")
+	fmt.Println("\nAllowlist Patterns (class + title):")
 	if len(cfg.AllowlistPatterns) == 0 {
 		fmt.Println("  (none)")
 	} else {
 		for _, pattern := range cfg.AllowlistPatterns {
+			fmt.Printf("  • %s\n", pattern)
+		}
+	}
+
+	fmt.Println("\nTitle-Only Patterns:")
+	if len(cfg.AllowlistTitlePatterns) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for _, pattern := range cfg.AllowlistTitlePatterns {
 			fmt.Printf("  • %s\n", pattern)
 		}
 	}

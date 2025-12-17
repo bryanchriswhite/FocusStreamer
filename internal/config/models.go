@@ -41,12 +41,13 @@ type Geometry struct {
 
 // Config represents the application configuration
 type Config struct {
-	AllowlistPatterns []string      `json:"allowlist_patterns" yaml:"allowlist_patterns"`
-	AllowlistedApps   []string      `json:"allowed_apps" yaml:"allowed_apps"`
-	VirtualDisplay    DisplayConfig `json:"virtual_display" yaml:"virtual_display"`
-	Overlay           OverlayConfig `json:"overlay" yaml:"overlay"`
-	ServerPort        int           `json:"server_port" yaml:"server_port"`
-	LogLevel          string        `json:"log_level" yaml:"log_level"`
+	AllowlistPatterns      []string      `json:"allowlist_patterns" yaml:"allowlist_patterns"`
+	AllowlistTitlePatterns []string      `json:"allowlist_title_patterns" yaml:"allowlist_title_patterns"`
+	AllowlistedApps        []string      `json:"allowed_apps" yaml:"allowed_apps"`
+	VirtualDisplay         DisplayConfig `json:"virtual_display" yaml:"virtual_display"`
+	Overlay                OverlayConfig `json:"overlay" yaml:"overlay"`
+	ServerPort             int           `json:"server_port" yaml:"server_port"`
+	LogLevel               string        `json:"log_level" yaml:"log_level"`
 }
 
 // OverlayConfig represents overlay configuration
@@ -124,10 +125,11 @@ func NewManager(configFile string) (*Manager, error) {
 // getDefaults returns default configuration
 func (m *Manager) getDefaults() *Config {
 	return &Config{
-		ServerPort:        8080,
-		LogLevel:          "info",
-		AllowlistPatterns: []string{},
-		AllowlistedApps:   []string{},
+		ServerPort:             8080,
+		LogLevel:               "info",
+		AllowlistPatterns:      []string{},
+		AllowlistTitlePatterns: []string{},
+		AllowlistedApps:        []string{},
 		VirtualDisplay: DisplayConfig{
 			Width:     1920,
 			Height:    1080,
@@ -160,6 +162,9 @@ func (m *Manager) load() error {
 	}
 	if cfg.AllowlistPatterns == nil {
 		cfg.AllowlistPatterns = []string{}
+	}
+	if cfg.AllowlistTitlePatterns == nil {
+		cfg.AllowlistTitlePatterns = []string{}
 	}
 	if cfg.Overlay.Widgets == nil {
 		cfg.Overlay.Widgets = []map[string]interface{}{}
@@ -341,6 +346,34 @@ func (m *Manager) RemovePattern(pattern string) error {
 	for i, p := range m.config.AllowlistPatterns {
 		if p == pattern {
 			m.config.AllowlistPatterns = append(m.config.AllowlistPatterns[:i], m.config.AllowlistPatterns[i+1:]...)
+			break
+		}
+	}
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// AddTitlePattern adds a title-only allowlist pattern
+func (m *Manager) AddTitlePattern(pattern string) error {
+	m.mu.Lock()
+	// Check for duplicates
+	for _, p := range m.config.AllowlistTitlePatterns {
+		if p == pattern {
+			m.mu.Unlock()
+			return nil // Already exists
+		}
+	}
+	m.config.AllowlistTitlePatterns = append(m.config.AllowlistTitlePatterns, pattern)
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// RemoveTitlePattern removes a title-only allowlist pattern
+func (m *Manager) RemoveTitlePattern(pattern string) error {
+	m.mu.Lock()
+	for i, p := range m.config.AllowlistTitlePatterns {
+		if p == pattern {
+			m.config.AllowlistTitlePatterns = append(m.config.AllowlistTitlePatterns[:i], m.config.AllowlistTitlePatterns[i+1:]...)
 			break
 		}
 	}

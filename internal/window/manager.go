@@ -217,6 +217,13 @@ func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
 		}
 	}
 
+	// Check title-only patterns (matches against title only)
+	for _, pattern := range cfg.AllowlistTitlePatterns {
+		if matched, err := regexp.MatchString(pattern, window.Title); err == nil && matched {
+			return true
+		}
+	}
+
 	return false
 }
 
