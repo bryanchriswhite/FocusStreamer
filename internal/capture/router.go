@@ -48,13 +48,18 @@ func (r *Router) Start() error {
 		}
 	}
 
-	// TODO: PipeWire capture is disabled due to go-gst library instability
-	// The library causes CGO crashes and cursor issues with the portal dialog.
-	// Need to implement PipeWire capture using a more robust approach:
-	// - Use gst-launch subprocess with file/shm output
-	// - Use wlr-screencopy protocol directly
-	// - Use a different GStreamer binding
-	log.Info().Msg("PipeWire capturer disabled (go-gst library unstable)")
+	// Try to initialize PipeWire capturer (uses subprocess for stability)
+	pw, err := pipewire.NewCapturer()
+	if err != nil {
+		log.Warn().Err(err).Msg("PipeWire capturer not available")
+	} else {
+		if err := pw.Start(); err != nil {
+			log.Warn().Err(err).Msg("Failed to start PipeWire capturer (user may need to grant permission)")
+		} else {
+			r.pipewireCapturer = pw
+			log.Info().Msg("PipeWire capturer initialized (subprocess mode)")
+		}
+	}
 
 	if r.x11Capturer == nil && r.pipewireCapturer == nil {
 		return fmt.Errorf("no capture backends available")
@@ -106,11 +111,6 @@ func (r *Router) CaptureWindow(window *config.WindowInfo) (*image.RGBA, error) {
 	}
 
 	if pw != nil && pw.CanCapture(window) {
-		log.Debug().
-			Uint32("id", window.ID).
-			Str("class", window.Class).
-			Bool("native_wayland", window.IsNativeWayland).
-			Msg("Using PipeWire capturer")
 		return pw.CaptureWindow(window)
 	}
 

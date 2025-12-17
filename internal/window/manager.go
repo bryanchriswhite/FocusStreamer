@@ -644,12 +644,15 @@ func (m *Manager) streamLoop(fps int) {
 
 // captureAndStream captures the current focused window and sends it to the output
 func (m *Manager) captureAndStream() {
+	log := logger.WithComponent("stream")
+
 	// Get current window
 	m.mu.RLock()
 	currentWin := m.currentWindow
 	m.mu.RUnlock()
 
 	if currentWin == nil {
+		log.Debug().Msg("No current window")
 		// No window focused - send placeholder
 		if m.output != nil {
 			cfg := m.configMgr.Get()
@@ -663,7 +666,8 @@ func (m *Manager) captureAndStream() {
 	var usePlaceholder bool
 
 	// Check if current window is allowlisted
-	if m.IsWindowAllowlisted(currentWin) {
+	isAllowlisted := m.IsWindowAllowlisted(currentWin)
+	if isAllowlisted {
 		// Current window is allowlisted - use it and save as last allowed
 		windowToCapture = currentWin
 		m.streamMu.Lock()
@@ -685,7 +689,6 @@ func (m *Manager) captureAndStream() {
 	}
 
 	var img *image.RGBA
-	log := logger.WithComponent("stream")
 
 	if usePlaceholder {
 		// Create and send placeholder frame

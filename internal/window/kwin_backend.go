@@ -3,6 +3,7 @@ package window
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -32,6 +33,9 @@ type KWinBackend struct {
 	x11Conn       *xgb.Conn
 	x11Root       xproto.Window
 	activeAtom    xproto.Atom
+	// Cache for KWin script-based active window detection
+	cachedActiveUUID     string
+	cachedActiveUUIDTime time.Time
 }
 
 // KWin D-Bus constants
@@ -174,14 +178,7 @@ func (b *KWinBackend) listWindowsKdotool() ([]*config.WindowInfo, error) {
 		}
 
 		windows = append(windows, info)
-		log.Debug().
-			Uint32("id", info.ID).
-			Str("title", info.Title).
-			Str("class", info.Class).
-			Msg("Found window")
 	}
-
-	log.Debug().Int("count", len(windows)).Msg("ListWindows completed")
 	return windows, nil
 }
 
@@ -473,61 +470,72 @@ func (b *KWinBackend) getWindowXID(windowPath string) (uint32, error) {
 	return 0, fmt.Errorf("no XID found")
 }
 
-// getWindowGeometryFromDBus gets window geometry from KWin D-Bus
+// getWindowGeometryFromDBus gets window geometry from KWin D-Bus using getWindowInfo method
 func (b *KWinBackend) getWindowGeometryFromDBus(windowPath string) config.Geometry {
 	geometry := config.Geometry{}
-	obj := b.conn.Object(kwinService, dbus.ObjectPath(windowPath))
 
-	interfaces := []string{
-		"org.kde.KWin.Window",
-		"org.kde.KWin.Client",
+	// Extract UUID from windowPath (format: /org/kde/KWin/Window/{uuid})
+	uuid := ""
+	if strings.Contains(windowPath, "/Window/") {
+		parts := strings.Split(windowPath, "/Window/")
+		if len(parts) > 1 {
+			uuid = parts[1]
+		}
 	}
 
-	for _, iface := range interfaces {
-		// Try to get x, y, width, height properties
-		if xVar, err := obj.GetProperty(iface + ".x"); err == nil {
-			switch v := xVar.Value().(type) {
-			case int32:
-				geometry.X = int(v)
-			case int64:
-				geometry.X = int(v)
-			}
-		}
+	if uuid == "" {
+		return geometry
+	}
 
-		if yVar, err := obj.GetProperty(iface + ".y"); err == nil {
-			switch v := yVar.Value().(type) {
-			case int32:
-				geometry.Y = int(v)
-			case int64:
-				geometry.Y = int(v)
-			}
-		}
+	// Call getWindowInfo method on /KWin interface
+	obj := b.conn.Object(kwinService, kwinPath)
+	var result map[string]dbus.Variant
+	if err := obj.Call(kwinInterface+".getWindowInfo", 0, uuid).Store(&result); err != nil {
+		return geometry
+	}
 
-		if wVar, err := obj.GetProperty(iface + ".width"); err == nil {
-			switch v := wVar.Value().(type) {
-			case int32:
-				geometry.Width = int(v)
-			case int64:
-				geometry.Width = int(v)
-			case uint32:
-				geometry.Width = int(v)
-			}
+	// Extract geometry from result
+	if xVar, ok := result["x"]; ok {
+		switch v := xVar.Value().(type) {
+		case float64:
+			geometry.X = int(v)
+		case int32:
+			geometry.X = int(v)
+		case int64:
+			geometry.X = int(v)
 		}
+	}
 
-		if hVar, err := obj.GetProperty(iface + ".height"); err == nil {
-			switch v := hVar.Value().(type) {
-			case int32:
-				geometry.Height = int(v)
-			case int64:
-				geometry.Height = int(v)
-			case uint32:
-				geometry.Height = int(v)
-			}
+	if yVar, ok := result["y"]; ok {
+		switch v := yVar.Value().(type) {
+		case float64:
+			geometry.Y = int(v)
+		case int32:
+			geometry.Y = int(v)
+		case int64:
+			geometry.Y = int(v)
 		}
+	}
 
-		// If we got geometry, break
-		if geometry.Width > 0 && geometry.Height > 0 {
-			break
+	if wVar, ok := result["width"]; ok {
+		switch v := wVar.Value().(type) {
+		case float64:
+			geometry.Width = int(v)
+		case int32:
+			geometry.Width = int(v)
+		case int64:
+			geometry.Width = int(v)
+		}
+	}
+
+	if hVar, ok := result["height"]; ok {
+		switch v := hVar.Value().(type) {
+		case float64:
+			geometry.Height = int(v)
+		case int32:
+			geometry.Height = int(v)
+		case int64:
+			geometry.Height = int(v)
 		}
 	}
 
@@ -616,8 +624,6 @@ func (b *KWinBackend) introspectContainer(containerPath string) ([]string, error
 
 // listWindowsWmctrl uses wmctrl as a last resort fallback
 func (b *KWinBackend) listWindowsWmctrl() ([]*config.WindowInfo, error) {
-	log := logger.WithComponent("kwin-backend")
-
 	cmd := exec.Command("wmctrl", "-l", "-p")
 	output, err := cmd.Output()
 	if err != nil {
@@ -663,11 +669,6 @@ func (b *KWinBackend) listWindowsWmctrl() ([]*config.WindowInfo, error) {
 		}
 
 		windows = append(windows, info)
-		log.Debug().
-			Uint32("id", info.ID).
-			Str("title", info.Title).
-			Str("class", info.Class).
-			Msg("Found window via wmctrl")
 	}
 
 	return windows, nil
@@ -714,47 +715,108 @@ func (b *KWinBackend) getActiveWindowUUIDViaQdbus() string {
 		}
 	}
 
-	// NOTE: Do NOT use queryWindowInfo - it's interactive and triggers a crosshair cursor!
-	// Try to get active window from KWin via activeClient property
+	// KDE6: Use KWin scripting to get active window (activeClient method doesn't exist)
+	uuid := b.getActiveWindowViaKWinScript(qdbusCmd)
+	if uuid != "" {
+		return uuid
+	}
+
+	// Fallback: Try legacy KDE5 approach with activeClient property
 	cmd := exec.Command(qdbusCmd, "org.kde.KWin", "/KWin", "org.kde.KWin.activeClient")
 	output, err := cmd.Output()
 	if err == nil {
 		result := strings.TrimSpace(string(output))
-		// Result might be a path like /org/kde/KWin/Window/{uuid}
 		if strings.Contains(result, "/Window/") {
 			parts := strings.Split(result, "/Window/")
 			if len(parts) > 1 {
 				return parts[1]
 			}
 		}
-		// Or it might be just the UUID
 		if len(result) > 0 && result != "/" {
 			return result
 		}
 	}
 
-	// Try alternative: list all windows and find the active one via property
-	cmd = exec.Command(qdbusCmd, "org.kde.KWin")
-	output, err = cmd.Output()
-	if err != nil {
+	return ""
+}
+
+// getActiveWindowViaKWinScript uses KWin scripting to get the active window UUID
+// This is needed for KDE6 which doesn't expose activeClient via D-Bus properties
+// Results are cached for 200ms to avoid excessive overhead
+func (b *KWinBackend) getActiveWindowViaKWinScript(qdbusCmd string) string {
+	log := logger.WithComponent("kwin-backend")
+
+	// Check cache first (valid for 200ms)
+	b.uuidMu.RLock()
+	if time.Since(b.cachedActiveUUIDTime) < 200*time.Millisecond && b.cachedActiveUUID != "" {
+		uuid := b.cachedActiveUUID
+		b.uuidMu.RUnlock()
+		return uuid
+	}
+	b.uuidMu.RUnlock()
+
+	// Create a temporary script
+	scriptContent := `var win = workspace.activeWindow || workspace.activeClient;
+if (win) {
+    print("FOCUSSTREAMER_ACTIVE:" + win.internalId);
+} else {
+    print("FOCUSSTREAMER_ACTIVE:none");
+}`
+
+	// Write script to temp file
+	scriptPath := "/tmp/focusstreamer_active_probe.js"
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0644); err != nil {
+		log.Debug().Err(err).Msg("Failed to write KWin script")
+		return ""
+	}
+	defer os.Remove(scriptPath)
+
+	scriptName := fmt.Sprintf("focusstreamer_probe_%d", time.Now().UnixNano())
+
+	// Load the script
+	loadCmd := exec.Command(qdbusCmd, "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", scriptPath, scriptName)
+	if _, err := loadCmd.Output(); err != nil {
+		log.Debug().Err(err).Msg("Failed to load KWin script")
 		return ""
 	}
 
-	// Look for Window paths and check each one's active property
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "/Window/") {
-			// Check if this window is active
-			checkCmd := exec.Command(qdbusCmd, "org.kde.KWin", line, "org.kde.KWin.Window.active")
-			checkOutput, err := checkCmd.Output()
-			if err == nil {
-				if strings.TrimSpace(string(checkOutput)) == "true" {
-					// Extract UUID from path
-					parts := strings.Split(line, "/Window/")
-					if len(parts) > 1 {
-						return parts[1]
-					}
+	// Start the scripting engine
+	startCmd := exec.Command(qdbusCmd, "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.start")
+	startCmd.Run()
+
+	// Give script time to execute (reduced from 100ms)
+	time.Sleep(50 * time.Millisecond)
+
+	// Unload the script
+	unloadCmd := exec.Command(qdbusCmd, "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", scriptName)
+	unloadCmd.Run()
+
+	// Read from journal to get the script output
+	journalCmd := exec.Command("journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-n", "10", "--no-pager", "-o", "cat")
+	journalOutput, err := journalCmd.Output()
+	if err != nil {
+		// Try alternative: journalctl for kwin_x11 or generic
+		journalCmd = exec.Command("journalctl", "--user", "-n", "10", "--no-pager", "-o", "cat")
+		journalOutput, _ = journalCmd.Output()
+	}
+
+	// Parse the output for our marker
+	lines := strings.Split(string(journalOutput), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if strings.Contains(line, "FOCUSSTREAMER_ACTIVE:") {
+			parts := strings.Split(line, "FOCUSSTREAMER_ACTIVE:")
+			if len(parts) > 1 {
+				uuid := strings.TrimSpace(parts[1])
+				// Remove braces if present
+				uuid = strings.Trim(uuid, "{}")
+				if uuid != "" && uuid != "none" {
+					// Cache the result
+					b.uuidMu.Lock()
+					b.cachedActiveUUID = uuid
+					b.cachedActiveUUIDTime = time.Now()
+					b.uuidMu.Unlock()
+					return uuid
 				}
 			}
 		}
@@ -786,13 +848,10 @@ func (b *KWinBackend) getX11ActiveWindow() (uint32, error) {
 
 // getFocusedWindowQdbus gets the active window via qdbus/D-Bus
 func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
-	log := logger.WithComponent("kwin-backend")
-
 	// First, try X11 active window detection (works for XWayland apps)
 	x11ActiveID, err := b.getX11ActiveWindow()
 	if err == nil && x11ActiveID > 0 && x11ActiveID != 0x200000 {
 		// x11ActiveID 0x200000 is a placeholder on Wayland, ignore it
-		log.Debug().Uint32("x11_active_id", x11ActiveID).Msg("Found X11 active window")
 
 		// Get all windows and find one matching this X11 ID
 		windows, err := b.listWindowsViaRunner()
@@ -801,11 +860,6 @@ func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
 				// Check if this window's ID matches the X11 active window
 				if win.ID == x11ActiveID {
 					win.Focused = true
-					log.Debug().
-						Uint32("id", win.ID).
-						Str("class", win.Class).
-						Str("title", win.Title).
-						Msg("Matched X11 active window")
 					return win, nil
 				}
 			}
@@ -815,11 +869,6 @@ func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
 		info, err := b.getWindowInfoFromX11(x11ActiveID)
 		if err == nil {
 			info.Focused = true
-			log.Debug().
-				Uint32("id", info.ID).
-				Str("class", info.Class).
-				Str("title", info.Title).
-				Msg("Got active window info from X11")
 			return info, nil
 		}
 	}
@@ -853,7 +902,6 @@ func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
 	// Try qdbus to get active window UUID directly (KDE6)
 	activeUUID := b.getActiveWindowUUIDViaQdbus()
 	if activeUUID != "" {
-		log.Debug().Str("active_uuid", activeUUID).Msg("Found active window via qdbus")
 		for _, win := range windows {
 			b.uuidMu.RLock()
 			rawID := b.windowUUIDs[win.ID]
@@ -862,11 +910,6 @@ func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
 			// Check if this window's UUID matches
 			if strings.Contains(rawID, activeUUID) {
 				win.Focused = true
-				log.Debug().
-					Uint32("id", win.ID).
-					Str("class", win.Class).
-					Bool("native_wayland", win.IsNativeWayland).
-					Msg("Matched active window via UUID")
 				return win, nil
 			}
 		}
@@ -896,11 +939,6 @@ func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
 					if err == nil {
 						if active, ok := activeVar.Value().(bool); ok && active {
 							win.Focused = true
-							log.Debug().
-								Uint32("id", win.ID).
-								Str("class", win.Class).
-								Bool("native_wayland", win.IsNativeWayland).
-								Msg("Found active window via D-Bus property")
 							return win, nil
 						}
 					}
@@ -911,7 +949,6 @@ func (b *KWinBackend) getFocusedWindowQdbus() (*config.WindowInfo, error) {
 
 	// Fallback: return first window (not ideal but better than nothing)
 	if len(windows) > 0 {
-		log.Debug().Msg("Could not determine active window, returning first window")
 		windows[0].Focused = true
 		return windows[0], nil
 	}

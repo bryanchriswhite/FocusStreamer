@@ -12,7 +12,7 @@ import (
 // Capturer implements the capture.Capturer interface using PipeWire
 type Capturer struct {
 	portal   *Portal
-	pipeline *GStreamerPipeline
+	pipeline *GStreamerSubprocess // Use subprocess instead of CGO-based pipeline
 	mu       sync.Mutex
 	started  bool
 }
@@ -49,8 +49,8 @@ func (c *Capturer) Start() error {
 	nodeID := portal.GetNodeID()
 	log.Info().Uint32("node_id", nodeID).Msg("Got PipeWire node ID")
 
-	// Create and start GStreamer pipeline
-	pipeline, err := NewGStreamerPipeline(nodeID)
+	// Create and start GStreamer subprocess (avoids CGO crashes)
+	pipeline, err := NewGStreamerSubprocess(nodeID)
 	if err != nil {
 		portal.Close()
 		return fmt.Errorf("failed to create pipeline: %w", err)
@@ -59,7 +59,7 @@ func (c *Capturer) Start() error {
 
 	if err := pipeline.Start(); err != nil {
 		portal.Close()
-		return fmt.Errorf("failed to start pipeline: %w", err)
+		return fmt.Errorf("failed to start pipeline subprocess: %w", err)
 	}
 
 	c.started = true
