@@ -13,9 +13,13 @@ require (
 require golang.org/x/image v0.33.0
 
 require (
+	github.com/godbus/dbus/v5 v5.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
+	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
+	github.com/tinyzimmer/go-glib v0.0.25 // indirect
+	github.com/tinyzimmer/go-gst v0.2.33 // indirect
 )
 
 require (
