@@ -1131,10 +1131,11 @@ func (b *KWinBackend) watchFocusLoop(callback func(*config.WindowInfo)) {
 			}
 
 			b.mu.Lock()
-			// Detect changes in window ID OR title (for browser tab changes)
+			// Detect changes in window ID, title, or geometry
 			changed := b.currentWindow == nil ||
 				b.currentWindow.ID != info.ID ||
-				b.currentWindow.Title != info.Title
+				b.currentWindow.Title != info.Title ||
+				b.currentWindow.Geometry != info.Geometry
 			if changed {
 				b.currentWindow = info
 			}

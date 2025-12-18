@@ -280,7 +280,11 @@ func (b *X11Backend) watchFocusLoop(callback func(*config.WindowInfo)) {
 			}
 
 			b.mu.Lock()
-			changed := b.currentWindow == nil || b.currentWindow.ID != info.ID
+			// Detect changes in window ID, title, or geometry
+			changed := b.currentWindow == nil ||
+				b.currentWindow.ID != info.ID ||
+				b.currentWindow.Title != info.Title ||
+				b.currentWindow.Geometry != info.Geometry
 			if changed {
 				b.currentWindow = info
 			}
