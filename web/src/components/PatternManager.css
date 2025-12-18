@@ -35,12 +35,98 @@
   border: 1px solid #e0e0e0;
   border-radius: 4px;
   background-color: #fafafa;
+  gap: 0.75rem;
 }
 
 .pattern-item code {
   flex: 1;
   font-size: 0.95rem;
   color: #1976d2;
+  word-break: break-all;
+}
+
+.pattern-item code.clickable {
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.pattern-item code.clickable:hover {
+  background-color: rgba(25, 118, 210, 0.1);
+}
+
+.pattern-item .edit-input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 0.95rem;
+}
+
+.pattern-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.pattern-actions button.small {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.pattern-actions button.secondary {
+  background-color: #e0e0e0;
+  color: #333;
+}
+
+.pattern-actions button.secondary:hover {
+  background-color: #d0d0d0;
+}
+
+.pattern-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 0.25rem;
+}
+
+.pattern-flags {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.case-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.case-toggle input {
+  cursor: pointer;
+}
+
+.case-toggle.active {
+  color: #1976d2;
+}
+
+.add-options {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.add-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
 }
 
 .empty-patterns {

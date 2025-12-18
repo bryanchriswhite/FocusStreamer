@@ -211,6 +211,12 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
             align-items: center;
             min-height: 100vh;
         }
+        .stream-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
         img {
             max-width: 100vw;
             max-height: 100vh;
@@ -219,10 +225,141 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
             object-fit: contain;
             display: block;
         }
+        .fade-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
+            opacity: 0;
+            transition: opacity 250ms ease;
+            pointer-events: none;
+            z-index: 500;
+        }
+        .fade-overlay.active {
+            opacity: 1;
+        }
+        .fab {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(70, 130, 180, 0.9);
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .fab:hover {
+            transform: scale(1.1);
+            background: rgba(100, 149, 237, 0.95);
+        }
+        .fab:active {
+            transform: scale(0.95);
+        }
+        .fab.standby {
+            background: rgba(220, 80, 80, 0.9);
+        }
+        .fab.standby:hover {
+            background: rgba(240, 100, 100, 0.95);
+        }
+        .fab-tooltip {
+            position: fixed;
+            bottom: 90px;
+            right: 24px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: system-ui, sans-serif;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+        .fab:hover + .fab-tooltip {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
-    <img src="/stream" alt="FocusStreamer Live Stream">
+    <div class="stream-container">
+        <img src="/stream" alt="FocusStreamer Live Stream">
+    </div>
+    <div class="fade-overlay" id="fadeOverlay"></div>
+    <button class="fab" id="standbyBtn" onclick="toggleStandby()" title="Toggle Standby">⏸</button>
+    <div class="fab-tooltip" id="tooltip">Toggle Standby</div>
+    <script>
+        let isStandby = false;
+        let isTransitioning = false;
+
+        // Check initial state
+        fetch('/api/stream/standby')
+            .then(r => r.json())
+            .then(data => {
+                isStandby = data.enabled;
+                updateButton();
+            })
+            .catch(console.error);
+
+        function toggleStandby() {
+            if (isTransitioning) return;
+            isTransitioning = true;
+
+            const overlay = document.getElementById('fadeOverlay');
+
+            // Fade overlay in (covers the stream)
+            overlay.classList.add('active');
+
+            // Wait for fade-in to complete
+            overlay.addEventListener('transitionend', function onFadeIn(e) {
+                if (e.propertyName !== 'opacity') return;
+                overlay.removeEventListener('transitionend', onFadeIn);
+
+                // Make API call while stream is covered
+                fetch('/api/stream/standby', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(data => {
+                        isStandby = data.enabled;
+                        updateButton();
+                        // Wait for stream to update with new content, then fade overlay out
+                        setTimeout(() => {
+                            overlay.classList.remove('active');
+                            isTransitioning = false;
+                        }, 350);
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        overlay.classList.remove('active');
+                        isTransitioning = false;
+                    });
+            });
+        }
+
+        function updateButton() {
+            const btn = document.getElementById('standbyBtn');
+            const tooltip = document.getElementById('tooltip');
+            if (isStandby) {
+                btn.classList.add('standby');
+                btn.innerHTML = '⏺';
+                tooltip.textContent = 'Resume Stream';
+            } else {
+                btn.classList.remove('standby');
+                btn.innerHTML = '⏸';
+                tooltip.textContent = 'Show Standby';
+            }
+        }
+    </script>
 </body>
 </html>`
 		w.Write([]byte(html))

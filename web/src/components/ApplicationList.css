@@ -94,3 +94,15 @@
   font-size: 0.875rem;
   color: #bbb;
 }
+
+.badge.badge-pattern {
+  background-color: #9c27b0;
+}
+
+.pattern-hint {
+  font-size: 0.75rem;
+  color: #9c27b0;
+  font-style: italic;
+  padding: 0.25rem 0.5rem;
+  cursor: help;
+}

@@ -11,13 +11,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// AllowlistSource indicates how an application was allowlisted
+type AllowlistSource string
+
+const (
+	AllowlistSourceNone     AllowlistSource = ""        // Not allowlisted
+	AllowlistSourceExplicit AllowlistSource = "explicit" // Explicitly added to allowlist
+	AllowlistSourcePattern  AllowlistSource = "pattern"  // Matched by a pattern
+)
+
 // Application represents a running application
 type Application struct {
-	ID          string `json:"id" mapstructure:"id"`
-	Name        string `json:"name" mapstructure:"name"`
-	WindowClass string `json:"window_class" mapstructure:"window_class"`
-	PID         int    `json:"pid" mapstructure:"pid"`
-	Allowlisted bool   `json:"allowlisted" mapstructure:"allowlisted"`
+	ID              string          `json:"id" mapstructure:"id"`
+	Name            string          `json:"name" mapstructure:"name"`
+	WindowClass     string          `json:"window_class" mapstructure:"window_class"`
+	PID             int             `json:"pid" mapstructure:"pid"`
+	Allowlisted     bool            `json:"allowlisted" mapstructure:"allowlisted"`
+	AllowlistSource AllowlistSource `json:"allowlist_source" mapstructure:"allowlist_source"`
 }
 
 // WindowInfo represents information about a window
@@ -48,6 +58,7 @@ type Config struct {
 	Overlay                OverlayConfig `json:"overlay" yaml:"overlay"`
 	ServerPort             int           `json:"server_port" yaml:"server_port"`
 	LogLevel               string        `json:"log_level" yaml:"log_level"`
+	PlaceholderImagePath   string        `json:"placeholder_image_path" yaml:"placeholder_image_path"`
 }
 
 // OverlayConfig represents overlay configuration
@@ -381,6 +392,29 @@ func (m *Manager) RemoveTitlePattern(pattern string) error {
 	return m.Save()
 }
 
+// SetPlaceholderImage sets the custom placeholder image path
+func (m *Manager) SetPlaceholderImage(path string) error {
+	m.mu.Lock()
+	m.config.PlaceholderImagePath = path
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// ClearPlaceholderImage clears the custom placeholder image path
+func (m *Manager) ClearPlaceholderImage() error {
+	m.mu.Lock()
+	m.config.PlaceholderImagePath = ""
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// GetPlaceholderImagePath returns the custom placeholder image path
+func (m *Manager) GetPlaceholderImagePath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.PlaceholderImagePath
+}
+
 // SetPort sets the server port
 func (m *Manager) SetPort(port int) error {
 	m.mu.Lock()
@@ -414,4 +448,9 @@ func (m *Manager) GetLogLevel() string {
 // GetConfigPath returns the path to the config file
 func (m *Manager) GetConfigPath() string {
 	return m.configPath
+}
+
+// GetConfigDir returns the config directory path
+func (m *Manager) GetConfigDir() string {
+	return filepath.Dir(m.configPath)
 }

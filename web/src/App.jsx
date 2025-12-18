@@ -4,6 +4,7 @@ import ApplicationList from './components/ApplicationList'
 import ApplicationPreview from './components/ApplicationPreview'
 import CurrentWindow from './components/CurrentWindow'
 import PatternManager from './components/PatternManager'
+import PlaceholderUpload from './components/PlaceholderUpload'
 
 function App() {
   const [applications, setApplications] = useState([])
@@ -87,7 +88,8 @@ function App() {
   const toggleAllowlist = async (appClass, isAllowlisted) => {
     try {
       if (isAllowlisted) {
-        await fetch(`/api/applications/allowlist/${appClass}`, {
+        // URL encode the appClass to handle special characters like dots
+        await fetch(`/api/applications/allowlist/${encodeURIComponent(appClass)}`, {
           method: 'DELETE'
         })
       } else {
@@ -129,6 +131,38 @@ function App() {
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  // Upload placeholder image
+  const uploadPlaceholder = async (file) => {
+    const formData = new FormData()
+    formData.append('image', file)
+
+    const response = await fetch('/api/config/placeholder-image', {
+      method: 'POST',
+      body: formData
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(text || 'Upload failed')
+    }
+
+    await fetchConfig()
+  }
+
+  // Delete placeholder image
+  const deletePlaceholder = async () => {
+    const response = await fetch('/api/config/placeholder-image', {
+      method: 'DELETE'
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(text || 'Delete failed')
+    }
+
+    await fetchConfig()
   }
 
   if (loading) {
@@ -186,6 +220,15 @@ function App() {
               patterns={config?.allowlist_patterns || []}
               onAddPattern={addPattern}
               onRemovePattern={removePattern}
+            />
+          </section>
+
+          <section className="section">
+            <h2>Waiting Screen</h2>
+            <PlaceholderUpload
+              currentPath={config?.placeholder_image_path}
+              onUpload={uploadPlaceholder}
+              onDelete={deletePlaceholder}
             />
           </section>
         </div>

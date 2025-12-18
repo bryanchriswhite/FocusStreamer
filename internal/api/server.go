@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -67,6 +68,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/config", s.handleUpdateConfig).Methods("PUT")
 	api.HandleFunc("/config/patterns", s.handleAddPattern).Methods("POST")
 	api.HandleFunc("/config/patterns", s.handleRemovePattern).Methods("DELETE")
+	api.HandleFunc("/config/placeholder-image", s.handleGetPlaceholder).Methods("GET")
+	api.HandleFunc("/config/placeholder-image", s.handleUploadPlaceholder).Methods("POST")
+	api.HandleFunc("/config/placeholder-image", s.handleDeletePlaceholder).Methods("DELETE")
 
 	// Overlay management
 	api.HandleFunc("/overlay/types", s.handleGetWidgetTypes).Methods("GET")
@@ -75,6 +79,10 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/overlay/instances/{id}", s.handleUpdateWidget).Methods("PUT")
 	api.HandleFunc("/overlay/instances/{id}", s.handleDeleteWidget).Methods("DELETE")
 	api.HandleFunc("/overlay/enabled", s.handleSetOverlayEnabled).Methods("PUT")
+
+	// Stream control
+	api.HandleFunc("/stream/standby", s.handleGetStandby).Methods("GET")
+	api.HandleFunc("/stream/standby", s.handleToggleStandby).Methods("POST")
 
 	// Health check
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
@@ -360,6 +368,151 @@ func (s *Server) handleRemovePattern(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleGetPlaceholder(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configMgr.Get()
+
+	if cfg.PlaceholderImagePath == "" {
+		http.Error(w, "No custom placeholder image set", http.StatusNotFound)
+		return
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(cfg.PlaceholderImagePath); os.IsNotExist(err) {
+		http.Error(w, "Placeholder image file not found", http.StatusNotFound)
+		return
+	}
+
+	// Determine content type based on extension
+	ext := strings.ToLower(filepath.Ext(cfg.PlaceholderImagePath))
+	var contentType string
+	switch ext {
+	case ".png":
+		contentType = "image/png"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".gif":
+		contentType = "image/gif"
+	default:
+		contentType = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	http.ServeFile(w, r, cfg.PlaceholderImagePath)
+}
+
+func (s *Server) handleUploadPlaceholder(w http.ResponseWriter, r *http.Request) {
+	log := logger.WithComponent("api")
+
+	// Parse multipart form (10MB max)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		log.Error().Err(err).Msg("Failed to parse multipart form")
+		http.Error(w, "Failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Get the file from form
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get image from form")
+		http.Error(w, "Failed to get image: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Validate file extension
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".gif" {
+		http.Error(w, "Invalid image format. Supported: PNG, JPEG, GIF", http.StatusBadRequest)
+		return
+	}
+
+	// Determine destination path
+	configDir := s.configMgr.GetConfigDir()
+	destPath := filepath.Join(configDir, "placeholder"+ext)
+
+	// Remove old placeholder if exists with different extension
+	oldPath := s.configMgr.GetPlaceholderImagePath()
+	if oldPath != "" && oldPath != destPath {
+		os.Remove(oldPath)
+	}
+
+	// Create destination file
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		log.Error().Err(err).Str("path", destPath).Msg("Failed to create placeholder file")
+		http.Error(w, "Failed to save image: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer destFile.Close()
+
+	// Copy file content
+	if _, err := io.Copy(destFile, file); err != nil {
+		log.Error().Err(err).Msg("Failed to copy image data")
+		http.Error(w, "Failed to save image: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update config with new path
+	if err := s.configMgr.SetPlaceholderImage(destPath); err != nil {
+		log.Error().Err(err).Msg("Failed to update config")
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info().Str("path", destPath).Msg("Placeholder image uploaded")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+		"path":   destPath,
+	})
+}
+
+func (s *Server) handleDeletePlaceholder(w http.ResponseWriter, r *http.Request) {
+	log := logger.WithComponent("api")
+
+	cfg := s.configMgr.Get()
+
+	// Remove file if it exists
+	if cfg.PlaceholderImagePath != "" {
+		if err := os.Remove(cfg.PlaceholderImagePath); err != nil && !os.IsNotExist(err) {
+			log.Error().Err(err).Str("path", cfg.PlaceholderImagePath).Msg("Failed to delete placeholder file")
+			http.Error(w, "Failed to delete image: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Clear config
+	if err := s.configMgr.ClearPlaceholderImage(); err != nil {
+		log.Error().Err(err).Msg("Failed to update config")
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info().Msg("Placeholder image deleted")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleGetStandby(w http.ResponseWriter, r *http.Request) {
+	enabled := s.windowMgr.GetForceStandby()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": enabled,
+	})
+}
+
+func (s *Server) handleToggleStandby(w http.ResponseWriter, r *http.Request) {
+	newState := s.windowMgr.ToggleForceStandby()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": newState,
+		"status":  "success",
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

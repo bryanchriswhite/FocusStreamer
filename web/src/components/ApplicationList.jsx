@@ -10,6 +10,9 @@ function ApplicationList({ applications, onToggleAllowlist, selectedApp, onSelec
     )
   }
 
+  // Check if app is allowlisted via pattern (cannot be removed directly)
+  const isPatternMatched = (app) => app.allowlist_source === 'pattern'
+
   return (
     <div className="application-list">
       {applications.map((app) => (
@@ -21,7 +24,11 @@ function ApplicationList({ applications, onToggleAllowlist, selectedApp, onSelec
           <div className="app-info">
             <div className="app-header">
               <div className="app-name">{app.name}</div>
-              {app.allowlisted && <span className="badge">Allowlisted</span>}
+              {app.allowlisted && (
+                <span className={`badge ${isPatternMatched(app) ? 'badge-pattern' : ''}`}>
+                  {isPatternMatched(app) ? 'Pattern Match' : 'Allowlisted'}
+                </span>
+              )}
             </div>
             <div className="app-details">
               <div className="app-class">
@@ -32,15 +39,21 @@ function ApplicationList({ applications, onToggleAllowlist, selectedApp, onSelec
               </div>
             </div>
           </div>
-          <button
-            className={app.allowlisted ? 'danger' : 'primary'}
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleAllowlist(app.window_class, app.allowlisted)
-            }}
-          >
-            {app.allowlisted ? 'Remove' : 'Add'}
-          </button>
+          {isPatternMatched(app) ? (
+            <span className="pattern-hint" title="Matched by pattern - edit patterns to change">
+              via pattern
+            </span>
+          ) : (
+            <button
+              className={app.allowlisted ? 'danger' : 'primary'}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleAllowlist(app.window_class, app.allowlisted)
+              }}
+            >
+              {app.allowlisted ? 'Remove' : 'Add'}
+            </button>
+          )}
         </div>
       ))}
     </div>

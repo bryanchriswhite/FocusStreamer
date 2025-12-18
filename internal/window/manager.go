@@ -6,6 +6,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	_ "image/gif"  // Register GIF decoder
+	_ "image/jpeg" // Register JPEG decoder
 	"image/png"
 	"os"
 	"regexp"
@@ -54,6 +56,14 @@ type Manager struct {
 	streamRunning     bool
 	streamMu          sync.Mutex
 	lastAllowedWindow *config.WindowInfo // Last allowlisted window to stream
+
+	// Manual standby control
+	forceStandby bool
+
+	// Cached placeholder frame
+	cachedPlaceholder     *image.RGBA
+	cachedPlaceholderPath string // Path used to generate cached placeholder
+	cachedPlaceholderSize image.Point
 }
 
 // NewManager creates a new window manager with auto-detected backend
@@ -195,36 +205,41 @@ func (m *Manager) ListWindows() ([]*config.WindowInfo, error) {
 
 // IsWindowAllowlisted checks if a window is allowlisted
 func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
+	return m.GetWindowAllowlistSource(window) != config.AllowlistSourceNone
+}
+
+// GetWindowAllowlistSource returns why a window is allowlisted (explicit, pattern, or none)
+func (m *Manager) GetWindowAllowlistSource(window *config.WindowInfo) config.AllowlistSource {
 	cfg := m.configMgr.Get()
 
 	// Normalize class to lowercase for comparison
 	normalizedClass := strings.ToLower(window.Class)
 
-	// Check exact match in allowlisted apps
+	// Check exact match in allowlisted apps first (explicit takes priority)
 	for _, app := range cfg.AllowlistedApps {
 		if app == normalizedClass {
-			return true
+			return config.AllowlistSourceExplicit
 		}
 	}
 
 	// Check pattern matching (matches against both class and title)
 	for _, pattern := range cfg.AllowlistPatterns {
 		if matched, err := regexp.MatchString(pattern, window.Class); err == nil && matched {
-			return true
+			return config.AllowlistSourcePattern
 		}
 		if matched, err := regexp.MatchString(pattern, window.Title); err == nil && matched {
-			return true
+			return config.AllowlistSourcePattern
 		}
 	}
 
 	// Check title-only patterns (matches against title only)
 	for _, pattern := range cfg.AllowlistTitlePatterns {
 		if matched, err := regexp.MatchString(pattern, window.Title); err == nil && matched {
-			return true
+			return config.AllowlistSourcePattern
 		}
 	}
 
-	return false
+	return config.AllowlistSourceNone
 }
 
 // Subscribe adds a listener for window changes
@@ -556,12 +571,14 @@ func (m *Manager) GetApplications() ([]config.Application, error) {
 		}
 
 		if _, exists := appMap[win.Class]; !exists {
+			allowlistSource := m.GetWindowAllowlistSource(win)
 			appMap[win.Class] = &config.Application{
-				ID:          win.Class,
-				Name:        win.Class, // Will be updated below
-				WindowClass: win.Class,
-				PID:         win.PID,
-				Allowlisted: m.IsWindowAllowlisted(win),
+				ID:              win.Class,
+				Name:            win.Class, // Will be updated below
+				WindowClass:     win.Class,
+				PID:             win.PID,
+				Allowlisted:     allowlistSource != config.AllowlistSourceNone,
+				AllowlistSource: allowlistSource,
 			}
 		}
 	}
@@ -653,13 +670,26 @@ func (m *Manager) streamLoop(fps int) {
 func (m *Manager) captureAndStream() {
 	log := logger.WithComponent("stream")
 
+	// Check if force standby is enabled
+	m.streamMu.Lock()
+	forceStandby := m.forceStandby
+	m.streamMu.Unlock()
+
+	if forceStandby {
+		if m.output != nil {
+			cfg := m.configMgr.Get()
+			placeholder := m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
+			m.output.WriteFrame(placeholder)
+		}
+		return
+	}
+
 	// Get current window
 	m.mu.RLock()
 	currentWin := m.currentWindow
 	m.mu.RUnlock()
 
 	if currentWin == nil {
-		log.Debug().Msg("No current window")
 		// No window focused - send placeholder
 		if m.output != nil {
 			cfg := m.configMgr.Get()
@@ -788,7 +818,40 @@ func (m *Manager) captureAndStream() {
 // createPlaceholderFrame creates a placeholder frame with a large centered target symbol
 // when no allowlisted window has been focused yet
 func (m *Manager) createPlaceholderFrame(width, height int) *image.RGBA {
-	// Create blank canvas with dark background
+	cfg := m.configMgr.Get()
+
+	// Check if we can use cached placeholder
+	m.streamMu.Lock()
+	if m.cachedPlaceholder != nil &&
+		m.cachedPlaceholderPath == cfg.PlaceholderImagePath &&
+		m.cachedPlaceholderSize.X == width &&
+		m.cachedPlaceholderSize.Y == height {
+		cached := m.cachedPlaceholder
+		m.streamMu.Unlock()
+		return cached
+	}
+	m.streamMu.Unlock()
+
+	log := logger.WithComponent("placeholder")
+	log.Debug().Msg("Generating new placeholder frame")
+
+	// Try to load custom placeholder image if configured
+	if cfg.PlaceholderImagePath != "" {
+		if customImg, err := m.loadAndResizeImage(cfg.PlaceholderImagePath, width, height); err == nil {
+			log.Debug().Str("path", cfg.PlaceholderImagePath).Msg("Using custom placeholder image")
+			// Cache it
+			m.streamMu.Lock()
+			m.cachedPlaceholder = customImg
+			m.cachedPlaceholderPath = cfg.PlaceholderImagePath
+			m.cachedPlaceholderSize = image.Point{X: width, Y: height}
+			m.streamMu.Unlock()
+			return customImg
+		} else {
+			log.Warn().Err(err).Str("path", cfg.PlaceholderImagePath).Msg("Failed to load custom placeholder, using default")
+		}
+	}
+
+	// Default placeholder: Create blank canvas with dark background
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	bgColor := color.RGBA{20, 20, 30, 255} // Dark blue-gray background
 	draw.Draw(img, img.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
@@ -830,7 +893,65 @@ func (m *Manager) createPlaceholderFrame(width, height int) *image.RGBA {
 	d.Dot = fixed.Point26_6{X: textX, Y: textY}
 	d.DrawString(text)
 
+	// Cache the default placeholder
+	m.streamMu.Lock()
+	m.cachedPlaceholder = img
+	m.cachedPlaceholderPath = "" // Empty path means default placeholder
+	m.cachedPlaceholderSize = image.Point{X: width, Y: height}
+	m.streamMu.Unlock()
+
 	return img
+}
+
+// loadAndResizeImage loads an image from disk and resizes it to fit the given dimensions
+// while maintaining aspect ratio, centering it on a dark background
+func (m *Manager) loadAndResizeImage(path string, width, height int) (*image.RGBA, error) {
+	// Open file
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open image: %w", err)
+	}
+	defer file.Close()
+
+	// Decode image (supports PNG, JPEG, GIF via registered decoders)
+	srcImg, _, err := image.Decode(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode image: %w", err)
+	}
+
+	// Create destination canvas with dark background
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	bgColor := color.RGBA{20, 20, 30, 255} // Dark blue-gray background
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
+
+	// Calculate scaling to fit while maintaining aspect ratio
+	srcBounds := srcImg.Bounds()
+	srcW := float64(srcBounds.Dx())
+	srcH := float64(srcBounds.Dy())
+	dstW := float64(width)
+	dstH := float64(height)
+
+	// Calculate scale factor (fit within bounds)
+	scaleX := dstW / srcW
+	scaleY := dstH / srcH
+	scale := scaleX
+	if scaleY < scaleX {
+		scale = scaleY
+	}
+
+	// Calculate new dimensions
+	newW := int(srcW * scale)
+	newH := int(srcH * scale)
+
+	// Calculate offset to center the image
+	offsetX := (width - newW) / 2
+	offsetY := (height - newH) / 2
+
+	// Scale and draw the image centered on the canvas
+	dstRect := image.Rect(offsetX, offsetY, offsetX+newW, offsetY+newH)
+	xdraw.CatmullRom.Scale(dst, dstRect, srcImg, srcBounds, xdraw.Over, nil)
+
+	return dst, nil
 }
 
 // drawCircle draws a filled circle at the given position
@@ -842,6 +963,31 @@ func drawCircle(img *image.RGBA, cx, cy, radius int, col color.Color) {
 			}
 		}
 	}
+}
+
+// SetForceStandby sets the force standby mode
+func (m *Manager) SetForceStandby(enabled bool) {
+	m.streamMu.Lock()
+	m.forceStandby = enabled
+	m.streamMu.Unlock()
+	logger.WithComponent("stream").Info().Bool("enabled", enabled).Msg("Force standby mode changed")
+}
+
+// GetForceStandby returns the current force standby state
+func (m *Manager) GetForceStandby() bool {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	return m.forceStandby
+}
+
+// ToggleForceStandby toggles the force standby mode and returns the new state
+func (m *Manager) ToggleForceStandby() bool {
+	m.streamMu.Lock()
+	m.forceStandby = !m.forceStandby
+	newState := m.forceStandby
+	m.streamMu.Unlock()
+	logger.WithComponent("stream").Info().Bool("enabled", newState).Msg("Force standby mode toggled")
+	return newState
 }
 
 // scaleAndLetterbox scales an image to fill the max dimensions while maintaining aspect ratio
