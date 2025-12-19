@@ -29,6 +29,13 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
+// ZoomState represents the current zoom and pan state for the stream
+type ZoomState struct {
+	Scale   float64 `json:"scale"`   // 1.0 = no zoom, 2.0 = 2x zoom, max 4.0
+	OffsetX float64 `json:"offsetX"` // Pan offset X as percentage (0.0 = left edge, 1.0 = right edge)
+	OffsetY float64 `json:"offsetY"` // Pan offset Y as percentage (0.0 = top edge, 1.0 = bottom edge)
+}
+
 // Manager handles window detection and monitoring
 type Manager struct {
 	// Backend for window discovery (X11 or KWin)
@@ -59,6 +66,14 @@ type Manager struct {
 
 	// Manual standby control
 	forceStandby bool
+
+	// Zoom and pan control
+	zoomState ZoomState
+	zoomMu    sync.RWMutex
+
+	// Last unzoomed frame for minimap thumbnail
+	lastUnzoomedFrame *image.RGBA
+	unzoomedFrameMu   sync.RWMutex
 
 	// Cached placeholder frame
 	cachedPlaceholder     *image.RGBA
@@ -125,6 +140,7 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 		listeners:        make([]chan *config.WindowInfo, 0),
 		stopChan:         make(chan struct{}),
 		compositeEnabled: compositeEnabled,
+		zoomState:        ZoomState{Scale: 1.0, OffsetX: 0.5, OffsetY: 0.5},
 	}
 
 	return m, nil
@@ -798,6 +814,14 @@ func (m *Manager) captureAndStream() {
 		}
 	}
 
+	// Store unzoomed frame for minimap thumbnail
+	m.unzoomedFrameMu.Lock()
+	m.lastUnzoomedFrame = img
+	m.unzoomedFrameMu.Unlock()
+
+	// Apply zoom/pan transformation if active
+	img = m.applyZoom(img)
+
 	// Apply overlay rendering if overlay manager is set
 	if m.overlayMgr != nil {
 		if err := m.overlayMgr.Render(img); err != nil {
@@ -988,6 +1012,139 @@ func (m *Manager) ToggleForceStandby() bool {
 	m.streamMu.Unlock()
 	logger.WithComponent("stream").Info().Bool("enabled", newState).Msg("Force standby mode toggled")
 	return newState
+}
+
+// GetZoomState returns the current zoom state
+func (m *Manager) GetZoomState() ZoomState {
+	m.zoomMu.RLock()
+	defer m.zoomMu.RUnlock()
+	return m.zoomState
+}
+
+// SetZoomState sets the zoom state with validation
+func (m *Manager) SetZoomState(state ZoomState) ZoomState {
+	m.zoomMu.Lock()
+	defer m.zoomMu.Unlock()
+
+	// Clamp scale between 1.0 and 4.0
+	if state.Scale < 1.0 {
+		state.Scale = 1.0
+	} else if state.Scale > 4.0 {
+		state.Scale = 4.0
+	}
+
+	// Clamp offsets to valid range based on scale
+	// At scale 2.0, viewport is 50% of image, so offset can be 0.25 to 0.75
+	// At scale 4.0, viewport is 25% of image, so offset can be 0.125 to 0.875
+	if state.Scale > 1.0 {
+		viewportSize := 1.0 / state.Scale
+		minOffset := viewportSize / 2
+		maxOffset := 1.0 - viewportSize/2
+
+		if state.OffsetX < minOffset {
+			state.OffsetX = minOffset
+		} else if state.OffsetX > maxOffset {
+			state.OffsetX = maxOffset
+		}
+
+		if state.OffsetY < minOffset {
+			state.OffsetY = minOffset
+		} else if state.OffsetY > maxOffset {
+			state.OffsetY = maxOffset
+		}
+	} else {
+		// At scale 1.0, offset should be centered
+		state.OffsetX = 0.5
+		state.OffsetY = 0.5
+	}
+
+	m.zoomState = state
+	return m.zoomState
+}
+
+// ResetZoom resets the zoom to default (no zoom)
+func (m *Manager) ResetZoom() ZoomState {
+	return m.SetZoomState(ZoomState{Scale: 1.0, OffsetX: 0.5, OffsetY: 0.5})
+}
+
+// GetThumbnail returns a scaled-down unzoomed thumbnail of the current stream frame
+func (m *Manager) GetThumbnail(maxWidth int) *image.RGBA {
+	m.unzoomedFrameMu.RLock()
+	src := m.lastUnzoomedFrame
+	m.unzoomedFrameMu.RUnlock()
+
+	if src == nil {
+		return nil
+	}
+
+	bounds := src.Bounds()
+	srcWidth := bounds.Dx()
+	srcHeight := bounds.Dy()
+
+	// Calculate thumbnail dimensions maintaining aspect ratio
+	scale := float64(maxWidth) / float64(srcWidth)
+	dstWidth := maxWidth
+	dstHeight := int(float64(srcHeight) * scale)
+
+	dst := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
+	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, bounds, xdraw.Over, nil)
+
+	return dst
+}
+
+// applyZoom applies the current zoom/pan state to an image
+func (m *Manager) applyZoom(img *image.RGBA) *image.RGBA {
+	m.zoomMu.RLock()
+	state := m.zoomState
+	m.zoomMu.RUnlock()
+
+	// No zoom needed if scale is 1.0
+	if state.Scale <= 1.0 {
+		return img
+	}
+
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+
+	// Calculate the size of the viewport in source pixels
+	viewportWidth := float64(width) / state.Scale
+	viewportHeight := float64(height) / state.Scale
+
+	// Calculate the top-left corner of the crop region
+	// Offset is the center position as a percentage
+	cropX := state.OffsetX*float64(width) - viewportWidth/2
+	cropY := state.OffsetY*float64(height) - viewportHeight/2
+
+	// Clamp to ensure we don't go out of bounds
+	if cropX < 0 {
+		cropX = 0
+	}
+	if cropY < 0 {
+		cropY = 0
+	}
+	if cropX+viewportWidth > float64(width) {
+		cropX = float64(width) - viewportWidth
+	}
+	if cropY+viewportHeight > float64(height) {
+		cropY = float64(height) - viewportHeight
+	}
+
+	// Create the crop rectangle
+	cropRect := image.Rect(
+		int(cropX),
+		int(cropY),
+		int(cropX+viewportWidth),
+		int(cropY+viewportHeight),
+	)
+
+	// Create destination image at original size
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	// Scale the cropped region to fill the destination
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, cropRect, xdraw.Over, nil)
+
+	return dst
 }
 
 // scaleAndLetterbox scales an image to fill the max dimensions while maintaining aspect ratio

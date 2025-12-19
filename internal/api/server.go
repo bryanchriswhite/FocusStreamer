@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"os"
@@ -83,6 +84,10 @@ func (s *Server) setupRoutes() {
 	// Stream control
 	api.HandleFunc("/stream/standby", s.handleGetStandby).Methods("GET")
 	api.HandleFunc("/stream/standby", s.handleToggleStandby).Methods("POST")
+	api.HandleFunc("/stream/zoom", s.handleGetZoom).Methods("GET")
+	api.HandleFunc("/stream/zoom", s.handleSetZoom).Methods("POST")
+	api.HandleFunc("/stream/zoom/reset", s.handleResetZoom).Methods("POST")
+	api.HandleFunc("/stream/thumbnail", s.handleThumbnail).Methods("GET")
 
 	// Health check
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
@@ -511,6 +516,42 @@ func (s *Server) handleToggleStandby(w http.ResponseWriter, r *http.Request) {
 		"enabled": newState,
 		"status":  "success",
 	})
+}
+
+func (s *Server) handleGetZoom(w http.ResponseWriter, r *http.Request) {
+	state := s.windowMgr.GetZoomState()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(state)
+}
+
+func (s *Server) handleSetZoom(w http.ResponseWriter, r *http.Request) {
+	var req window.ZoomState
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	newState := s.windowMgr.SetZoomState(req)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(newState)
+}
+
+func (s *Server) handleResetZoom(w http.ResponseWriter, r *http.Request) {
+	newState := s.windowMgr.ResetZoom()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(newState)
+}
+
+func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	thumb := s.windowMgr.GetThumbnail(200) // 200px wide thumbnail
+	if thumb == nil {
+		http.Error(w, "No frame available", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	jpeg.Encode(w, thumb, &jpeg.Options{Quality: 70})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

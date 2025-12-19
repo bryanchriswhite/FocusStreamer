@@ -320,6 +320,8 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
             object-fit: contain;
             display: block;
             background: #000;
+            user-select: none;
+            -webkit-user-drag: none;
         }
         .fade-overlay {
             position: fixed;
@@ -429,11 +431,75 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
             background: rgba(60, 60, 60, 0.95);
             color: #fff;
         }
+        .minimap {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            width: 180px;
+            background: rgba(0, 0, 0, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 8px;
+            z-index: 1000;
+            display: none;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .minimap.visible {
+            display: block;
+        }
+        .minimap-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            color: #aaa;
+            font-size: 11px;
+        }
+        .minimap-canvas-container {
+            position: relative;
+            width: 100%;
+            background: #111;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .minimap-canvas {
+            width: 100%;
+            display: block;
+        }
+        .minimap-viewport {
+            position: absolute;
+            border: 2px solid #4CAF50;
+            background: rgba(76, 175, 80, 0.15);
+            cursor: move;
+            box-sizing: border-box;
+        }
+        .minimap-canvas-container {
+            cursor: pointer;
+        }
+        .zoom-indicator {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 6px 14px;
+            border-radius: 16px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 13px;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+        }
+        .zoom-indicator.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
-    <div class="stream-container">
-        <img src="/stream" alt="FocusStreamer Live Stream">
+    <div class="stream-container" id="streamContainer">
+        <img id="streamImg" src="/stream" alt="FocusStreamer Live Stream">
     </div>
     <div class="fade-overlay" id="fadeOverlay"></div>
     <button class="fab" id="standbyBtn" onclick="toggleStandby()" title="Toggle Standby">⏸</button>
@@ -443,11 +509,41 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         <a href="/" class="nav-link">📺 Stream</a>
         <a href="/settings" class="nav-link">⚙ Settings</a>
     </div>
+    <div class="minimap" id="minimap">
+        <div class="minimap-header">
+            <span>Zoom: <span id="zoomLevel">1.0</span>x</span>
+            <span style="color:#666;cursor:pointer" onclick="resetZoom()">Reset</span>
+        </div>
+        <div class="minimap-canvas-container">
+            <canvas id="minimapCanvas" class="minimap-canvas"></canvas>
+            <div id="minimapViewport" class="minimap-viewport"></div>
+        </div>
+    </div>
+    <div class="zoom-indicator" id="zoomIndicator">1.0x</div>
     <script>
+        // Standby state
         let isStandby = false;
         let isTransitioning = false;
 
-        // Check initial state
+        // Zoom state
+        let zoomState = { scale: 1.0, offsetX: 0.5, offsetY: 0.5 };
+        let isDragging = false;
+        let dragStart = { x: 0, y: 0 };
+        let dragStartOffset = { x: 0, y: 0 };
+        let zoomIndicatorTimeout = null;
+        let zoomUpdateTimeout = null;
+        let pendingZoomUpdate = false;
+
+        // Elements
+        const streamContainer = document.getElementById('streamContainer');
+        const streamImg = document.getElementById('streamImg');
+        const minimap = document.getElementById('minimap');
+        const minimapCanvas = document.getElementById('minimapCanvas');
+        const minimapViewport = document.getElementById('minimapViewport');
+        const zoomIndicator = document.getElementById('zoomIndicator');
+        const zoomLevelSpan = document.getElementById('zoomLevel');
+
+        // Initialize
         fetch('/api/stream/standby')
             .then(r => r.json())
             .then(data => {
@@ -456,27 +552,197 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
             })
             .catch(console.error);
 
+        fetch('/api/stream/zoom')
+            .then(r => r.json())
+            .then(data => {
+                zoomState = data;
+                updateMinimap();
+            })
+            .catch(console.error);
+
+        // Zoom with mouse wheel (shared handler)
+        function handleWheel(e) {
+            e.preventDefault();
+
+            const delta = e.deltaY > 0 ? -0.25 : 0.25;
+            let newScale = zoomState.scale + delta;
+            newScale = Math.max(1.0, Math.min(4.0, newScale));
+
+            if (newScale !== zoomState.scale) {
+                // Adjust offset to zoom toward cursor position (only when zooming in on stream)
+                if (newScale > zoomState.scale && e.currentTarget === streamContainer) {
+                    const rect = streamImg.getBoundingClientRect();
+                    const relX = (e.clientX - rect.left) / rect.width;
+                    const relY = (e.clientY - rect.top) / rect.height;
+
+                    // Move offset toward cursor
+                    const factor = 0.1;
+                    zoomState.offsetX += (relX - 0.5) * factor;
+                    zoomState.offsetY += (relY - 0.5) * factor;
+                }
+
+                zoomState.scale = newScale;
+                updateZoom();
+            }
+        }
+        streamContainer.addEventListener('wheel', handleWheel, { passive: false });
+        minimap.addEventListener('wheel', handleWheel, { passive: false });
+
+        // Double-click to reset
+        streamContainer.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            resetZoom();
+        });
+
+        // Get minimap canvas container for drag handling
+        const minimapContainer = document.querySelector('.minimap-canvas-container');
+
+        // Click on minimap to jump to position
+        minimapContainer.addEventListener('click', (e) => {
+            if (isDragging) return; // Don't jump if we were dragging
+
+            const rect = minimapContainer.getBoundingClientRect();
+            const relX = (e.clientX - rect.left) / rect.width;
+            const relY = (e.clientY - rect.top) / rect.height;
+
+            zoomState.offsetX = relX;
+            zoomState.offsetY = relY;
+            updateZoom();
+        });
+
+        // Drag viewport in minimap to pan
+        minimapViewport.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // Left click only
+
+            isDragging = true;
+            dragStart = { x: e.clientX, y: e.clientY };
+            dragStartOffset = { x: zoomState.offsetX, y: zoomState.offsetY };
+            e.preventDefault();
+            e.stopPropagation(); // Don't trigger click on container
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            const rect = minimapContainer.getBoundingClientRect();
+
+            const dx = (e.clientX - dragStart.x) / rect.width;
+            const dy = (e.clientY - dragStart.y) / rect.height;
+
+            zoomState.offsetX = dragStartOffset.x + dx;
+            zoomState.offsetY = dragStartOffset.y + dy;
+
+            updateZoom();
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+            }
+        });
+
+        function updateZoom() {
+            // Debounce API calls to prevent overwhelming the server
+            pendingZoomUpdate = true;
+            updateMinimap(); // Update viewport rectangle immediately
+            showZoomIndicator();
+
+            if (zoomUpdateTimeout) return; // Already scheduled
+
+            zoomUpdateTimeout = setTimeout(() => {
+                zoomUpdateTimeout = null;
+                if (!pendingZoomUpdate) return;
+                pendingZoomUpdate = false;
+
+                fetch('/api/stream/zoom', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(zoomState)
+                })
+                .then(r => r.json())
+                .then(data => {
+                    zoomState = data;
+                    updateMinimap();
+                    fetchMinimapThumbnail(); // Fetch unzoomed thumbnail after zoom applied
+                })
+                .catch(console.error);
+            }, 50); // 50ms debounce
+        }
+
+        function resetZoom() {
+            fetch('/api/stream/zoom/reset', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    zoomState = data;
+                    updateMinimap();
+                    showZoomIndicator();
+                })
+                .catch(console.error);
+        }
+
+        function updateMinimap() {
+            const isZoomed = zoomState.scale > 1.0;
+            minimap.classList.toggle('visible', isZoomed);
+            zoomLevelSpan.textContent = zoomState.scale.toFixed(1);
+
+            if (isZoomed) {
+                // Update viewport rectangle position
+                const viewportSize = 1.0 / zoomState.scale;
+                const vpWidth = viewportSize * 100;
+                const vpHeight = viewportSize * 100;
+                const vpLeft = (zoomState.offsetX - viewportSize / 2) * 100;
+                const vpTop = (zoomState.offsetY - viewportSize / 2) * 100;
+
+                minimapViewport.style.width = vpWidth + '%';
+                minimapViewport.style.height = vpHeight + '%';
+                minimapViewport.style.left = vpLeft + '%';
+                minimapViewport.style.top = vpTop + '%';
+            }
+        }
+
+        // Fetch unzoomed thumbnail for minimap (separate from updateMinimap to avoid too many requests)
+        function fetchMinimapThumbnail() {
+            if (zoomState.scale <= 1.0) return;
+
+            const ctx = minimapCanvas.getContext('2d');
+            const img = new Image();
+            img.onload = () => {
+                minimapCanvas.width = img.width;
+                minimapCanvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = '/api/stream/thumbnail?' + Date.now();
+        }
+
+        function showZoomIndicator() {
+            zoomIndicator.textContent = zoomState.scale.toFixed(1) + 'x';
+            zoomIndicator.classList.add('visible');
+
+            clearTimeout(zoomIndicatorTimeout);
+            zoomIndicatorTimeout = setTimeout(() => {
+                zoomIndicator.classList.remove('visible');
+            }, 1000);
+        }
+
+        // Periodically fetch unzoomed thumbnail for minimap
+        setInterval(fetchMinimapThumbnail, 500);
+
         function toggleStandby() {
             if (isTransitioning) return;
             isTransitioning = true;
 
             const overlay = document.getElementById('fadeOverlay');
-
-            // Fade overlay in (covers the stream)
             overlay.classList.add('active');
 
-            // Wait for fade-in to complete
             overlay.addEventListener('transitionend', function onFadeIn(e) {
                 if (e.propertyName !== 'opacity') return;
                 overlay.removeEventListener('transitionend', onFadeIn);
 
-                // Make API call while stream is covered
                 fetch('/api/stream/standby', { method: 'POST' })
                     .then(r => r.json())
                     .then(data => {
                         isStandby = data.enabled;
                         updateButton();
-                        // Wait for stream to update with new content, then fade overlay out
                         setTimeout(() => {
                             overlay.classList.remove('active');
                             isTransitioning = false;
