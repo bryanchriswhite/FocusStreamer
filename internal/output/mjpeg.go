@@ -597,28 +597,39 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         // Get minimap canvas container for drag handling
         const minimapContainer = document.querySelector('.minimap-canvas-container');
 
-        // Click on minimap to jump to position
-        minimapContainer.addEventListener('click', (e) => {
-            if (isDragging) return; // Don't jump if we were dragging
+        // Clamp offset values to valid range based on current scale
+        function clampOffset() {
+            if (zoomState.scale <= 1.0) {
+                zoomState.offsetX = 0.5;
+                zoomState.offsetY = 0.5;
+                return;
+            }
+            const viewportSize = 1.0 / zoomState.scale;
+            const minOffset = viewportSize / 2;
+            const maxOffset = 1.0 - viewportSize / 2;
+            zoomState.offsetX = Math.max(minOffset, Math.min(maxOffset, zoomState.offsetX));
+            zoomState.offsetY = Math.max(minOffset, Math.min(maxOffset, zoomState.offsetY));
+        }
+
+        // Click/drag anywhere on minimap to pan - jump immediately on mousedown and follow mouse
+        minimapContainer.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // Left click only
 
             const rect = minimapContainer.getBoundingClientRect();
             const relX = (e.clientX - rect.left) / rect.width;
             const relY = (e.clientY - rect.top) / rect.height;
 
+            // Jump to clicked position immediately
             zoomState.offsetX = relX;
             zoomState.offsetY = relY;
+            clampOffset();
             updateZoom();
-        });
 
-        // Drag viewport in minimap to pan
-        minimapViewport.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return; // Left click only
-
+            // Start dragging from this position
             isDragging = true;
             dragStart = { x: e.clientX, y: e.clientY };
             dragStartOffset = { x: zoomState.offsetX, y: zoomState.offsetY };
             e.preventDefault();
-            e.stopPropagation(); // Don't trigger click on container
         });
 
         document.addEventListener('mousemove', (e) => {
@@ -631,6 +642,7 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
 
             zoomState.offsetX = dragStartOffset.x + dx;
             zoomState.offsetY = dragStartOffset.y + dy;
+            clampOffset();
 
             updateZoom();
         });
