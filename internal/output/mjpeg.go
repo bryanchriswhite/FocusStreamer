@@ -218,12 +218,11 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
             align-items: center;
         }
         img {
-            max-width: 100vw;
-            max-height: 100vh;
-            width: auto;
-            height: auto;
+            width: 100vw;
+            height: 100vh;
             object-fit: contain;
             display: block;
+            background: #000;
         }
         .fade-overlay {
             position: fixed;

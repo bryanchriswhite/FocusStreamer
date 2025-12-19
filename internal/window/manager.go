@@ -919,9 +919,9 @@ func (m *Manager) loadAndResizeImage(path string, width, height int) (*image.RGB
 		return nil, fmt.Errorf("failed to decode image: %w", err)
 	}
 
-	// Create destination canvas with dark background
+	// Create destination canvas with black background
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
-	bgColor := color.RGBA{20, 20, 30, 255} // Dark blue-gray background
+	bgColor := color.RGBA{0, 0, 0, 255} // Pure black background
 	draw.Draw(dst, dst.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
 
 	// Calculate scaling to fit while maintaining aspect ratio
