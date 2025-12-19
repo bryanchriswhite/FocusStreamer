@@ -89,17 +89,18 @@ func (s *Server) setupRoutes() {
 
 	// MJPEG stream endpoints (if MJPEG output is enabled)
 	if s.mjpegOut != nil {
-		s.router.HandleFunc("/view", s.mjpegOut.GetViewerHandler())   // Responsive HTML viewer
-		s.router.HandleFunc("/stream", s.mjpegOut.GetHTTPHandler())    // Raw MJPEG feed
+		s.router.HandleFunc("/", s.mjpegOut.GetViewerHandler())          // Clean HTML viewer (root)
+		s.router.HandleFunc("/control", s.mjpegOut.GetControlHandler())  // HTML viewer with controls
+		s.router.HandleFunc("/stream", s.mjpegOut.GetHTTPHandler())      // Raw MJPEG feed
 		s.router.HandleFunc("/stats", s.mjpegOut.GetStatsHandler())
 	}
 
-	// Serve static files (React app from web/dist)
-	s.router.PathPrefix("/").Handler(s.createStaticHandler())
+	// Serve static files (React app from web/dist) at /settings
+	s.router.PathPrefix("/settings").Handler(s.createSettingsHandler())
 }
 
-// createStaticHandler creates a handler for serving static files
-func (s *Server) createStaticHandler() http.Handler {
+// createSettingsHandler creates a handler for serving the React settings app at /settings
+func (s *Server) createSettingsHandler() http.Handler {
 	// Get the web/dist directory path
 	webDistPath := filepath.Join("web", "dist")
 
@@ -116,23 +117,20 @@ func (s *Server) createStaticHandler() http.Handler {
 
 	logger.WithComponent("overlay").Info().Msgf("✅ Found web UI build at: %s", absPath)
 
-	// Create file server for the dist directory
-	fileServer := http.FileServer(http.Dir(webDistPath))
+	// Create file server with /settings prefix stripped
+	fileServer := http.StripPrefix("/settings", http.FileServer(http.Dir(webDistPath)))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Don't serve static files for API routes or MJPEG stream routes
-		if strings.HasPrefix(r.URL.Path, "/api") ||
-			strings.HasPrefix(r.URL.Path, "/view") ||
-			strings.HasPrefix(r.URL.Path, "/stream") ||
-			strings.HasPrefix(r.URL.Path, "/stats") {
-			http.NotFound(w, r)
-			return
+		// Strip /settings prefix to get the actual file path
+		filePath := strings.TrimPrefix(r.URL.Path, "/settings")
+		if filePath == "" {
+			filePath = "/"
 		}
 
-		// For root or any non-asset path, serve index.html (for client-side routing)
-		path := filepath.Join(webDistPath, r.URL.Path)
-		if _, err := os.Stat(path); os.IsNotExist(err) && !strings.HasPrefix(r.URL.Path, "/assets") {
-			// Serve index.html for client-side routing
+		// Check if the file exists
+		path := filepath.Join(webDistPath, filePath)
+		if _, err := os.Stat(path); os.IsNotExist(err) && !strings.HasPrefix(filePath, "/assets") {
+			// Serve index.html for SPA routing
 			http.ServeFile(w, r, filepath.Join(webDistPath, "index.html"))
 			return
 		}

@@ -176,8 +176,14 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1>🎯 FocusStreamer</h1>
-        <p className="subtitle">Virtual Display for Discord Screen Sharing</p>
+        <div className="header-main">
+          <h1>🎯 FocusStreamer</h1>
+          <p className="subtitle">Virtual Display for Discord Screen Sharing</p>
+        </div>
+        <nav className="header-nav">
+          <a href="/" className="nav-link">📺 Stream</a>
+          <a href="/control" className="nav-link">🎛 Control</a>
+        </nav>
       </header>
 
       {error && (

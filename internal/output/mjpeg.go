@@ -187,7 +187,7 @@ func (m *MJPEGOutput) GetHTTPHandler() http.HandlerFunc {
 	}
 }
 
-// GetViewerHandler returns an HTTP handler that displays the stream in a responsive HTML page
+// GetViewerHandler returns an HTTP handler that displays a clean stream viewer with subtle hover nav
 func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -196,7 +196,104 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FocusStreamer - Live Stream</title>
+    <title>FocusStreamer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .stream-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        img {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            display: block;
+            background: #000;
+        }
+        .nav-trigger {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100px;
+            height: 100px;
+            z-index: 900;
+        }
+        .nav-menu {
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            display: flex;
+            gap: 8px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .nav-trigger:hover ~ .nav-menu,
+        .nav-menu:hover {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: rgba(40, 40, 40, 0.9);
+            color: #ccc;
+            text-decoration: none;
+            border-radius: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 13px;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .nav-link:hover {
+            background: rgba(60, 60, 60, 0.95);
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="stream-container">
+        <img src="/stream" alt="FocusStreamer Live Stream">
+    </div>
+    <div class="nav-trigger"></div>
+    <div class="nav-menu">
+        <a href="/settings" class="nav-link">⚙ Settings</a>
+        <a href="/control" class="nav-link">🎛 Control</a>
+    </div>
+</body>
+</html>`
+		w.Write([]byte(html))
+	}
+}
+
+// GetControlHandler returns an HTTP handler that displays the stream with control UI
+func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FocusStreamer - Control</title>
     <style>
         * {
             margin: 0;
@@ -289,6 +386,49 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
         .fab:hover + .fab-tooltip {
             opacity: 1;
         }
+        .nav-trigger {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100px;
+            height: 100px;
+            z-index: 900;
+        }
+        .nav-menu {
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            display: flex;
+            gap: 8px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .nav-trigger:hover ~ .nav-menu,
+        .nav-menu:hover {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: rgba(40, 40, 40, 0.9);
+            color: #ccc;
+            text-decoration: none;
+            border-radius: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 13px;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .nav-link:hover {
+            background: rgba(60, 60, 60, 0.95);
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -298,6 +438,11 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
     <div class="fade-overlay" id="fadeOverlay"></div>
     <button class="fab" id="standbyBtn" onclick="toggleStandby()" title="Toggle Standby">⏸</button>
     <div class="fab-tooltip" id="tooltip">Toggle Standby</div>
+    <div class="nav-trigger"></div>
+    <div class="nav-menu">
+        <a href="/" class="nav-link">📺 Stream</a>
+        <a href="/settings" class="nav-link">⚙ Settings</a>
+    </div>
     <script>
         let isStandby = false;
         let isTransitioning = false;
