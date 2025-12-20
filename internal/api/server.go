@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image/jpeg"
@@ -73,6 +75,12 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/config/placeholder-image", s.handleUploadPlaceholder).Methods("POST")
 	api.HandleFunc("/config/placeholder-image", s.handleDeletePlaceholder).Methods("DELETE")
 
+	// Multi-placeholder image endpoints
+	api.HandleFunc("/config/placeholder-images", s.handleGetPlaceholders).Methods("GET")
+	api.HandleFunc("/config/placeholder-images", s.handleUploadPlaceholders).Methods("POST")
+	api.HandleFunc("/config/placeholder-images/{id}", s.handleGetPlaceholderByID).Methods("GET")
+	api.HandleFunc("/config/placeholder-images/{id}", s.handleDeletePlaceholderByID).Methods("DELETE")
+
 	// Overlay management
 	api.HandleFunc("/overlay/types", s.handleGetWidgetTypes).Methods("GET")
 	api.HandleFunc("/overlay/instances", s.handleGetWidgetInstances).Methods("GET")
@@ -84,6 +92,8 @@ func (s *Server) setupRoutes() {
 	// Stream control
 	api.HandleFunc("/stream/standby", s.handleGetStandby).Methods("GET")
 	api.HandleFunc("/stream/standby", s.handleToggleStandby).Methods("POST")
+	api.HandleFunc("/stream/placeholder/next", s.handleNextPlaceholder).Methods("POST")
+	api.HandleFunc("/stream/placeholder/prev", s.handlePrevPlaceholder).Methods("POST")
 	api.HandleFunc("/stream/zoom", s.handleGetZoom).Methods("GET")
 	api.HandleFunc("/stream/zoom", s.handleSetZoom).Methods("POST")
 	api.HandleFunc("/stream/zoom/reset", s.handleResetZoom).Methods("POST")
@@ -501,6 +511,208 @@ func (s *Server) handleDeletePlaceholder(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
+// generatePlaceholderID generates a random ID for placeholder images
+func generatePlaceholderID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// extractPlaceholderID extracts the ID from a placeholder path
+// e.g., "/path/to/placeholder_abc123.png" -> "abc123"
+func extractPlaceholderID(path string) string {
+	base := filepath.Base(path)
+	// Remove extension
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	// Remove "placeholder_" prefix
+	if strings.HasPrefix(name, "placeholder_") {
+		return strings.TrimPrefix(name, "placeholder_")
+	}
+	// For legacy single placeholder file, use hash of path
+	return name
+}
+
+func (s *Server) handleGetPlaceholders(w http.ResponseWriter, r *http.Request) {
+	paths := s.configMgr.GetPlaceholderImagePaths()
+
+	images := make([]map[string]string, 0)
+	for _, path := range paths {
+		// Check if file exists
+		if _, err := os.Stat(path); err == nil {
+			id := extractPlaceholderID(path)
+			images = append(images, map[string]string{
+				"id":   id,
+				"path": path,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"images": images,
+		"count":  len(images),
+	})
+}
+
+func (s *Server) handleUploadPlaceholders(w http.ResponseWriter, r *http.Request) {
+	log := logger.WithComponent("api")
+
+	// Parse multipart form (10MB max)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		log.Error().Err(err).Msg("Failed to parse multipart form")
+		http.Error(w, "Failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Get the file from form
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get image from form")
+		http.Error(w, "Failed to get image: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Validate file extension
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".gif" {
+		http.Error(w, "Invalid image format. Supported: PNG, JPEG, GIF", http.StatusBadRequest)
+		return
+	}
+
+	// Create placeholders directory
+	configDir := s.configMgr.GetConfigDir()
+	placeholderDir := filepath.Join(configDir, "placeholders")
+	if err := os.MkdirAll(placeholderDir, 0755); err != nil {
+		log.Error().Err(err).Str("path", placeholderDir).Msg("Failed to create placeholders directory")
+		http.Error(w, "Failed to create directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Generate unique ID and destination path
+	id := generatePlaceholderID()
+	destPath := filepath.Join(placeholderDir, fmt.Sprintf("placeholder_%s%s", id, ext))
+
+	// Create destination file
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		log.Error().Err(err).Str("path", destPath).Msg("Failed to create placeholder file")
+		http.Error(w, "Failed to save image: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer destFile.Close()
+
+	// Copy file content
+	if _, err := io.Copy(destFile, file); err != nil {
+		log.Error().Err(err).Msg("Failed to copy image data")
+		os.Remove(destPath) // Clean up on failure
+		http.Error(w, "Failed to save image: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Add to config
+	if err := s.configMgr.AddPlaceholderImage(destPath); err != nil {
+		log.Error().Err(err).Msg("Failed to update config")
+		os.Remove(destPath) // Clean up on failure
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info().Str("path", destPath).Str("id", id).Msg("Placeholder image uploaded")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+		"id":     id,
+		"path":   destPath,
+	})
+}
+
+func (s *Server) handleGetPlaceholderByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	// Find path by ID
+	paths := s.configMgr.GetPlaceholderImagePaths()
+	var targetPath string
+	for _, path := range paths {
+		if extractPlaceholderID(path) == id {
+			targetPath = path
+			break
+		}
+	}
+
+	if targetPath == "" {
+		http.Error(w, "Image not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+		http.Error(w, "Image file not found", http.StatusNotFound)
+		return
+	}
+
+	// Determine content type
+	ext := strings.ToLower(filepath.Ext(targetPath))
+	var contentType string
+	switch ext {
+	case ".png":
+		contentType = "image/png"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".gif":
+		contentType = "image/gif"
+	default:
+		contentType = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	http.ServeFile(w, r, targetPath)
+}
+
+func (s *Server) handleDeletePlaceholderByID(w http.ResponseWriter, r *http.Request) {
+	log := logger.WithComponent("api")
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	// Find path by ID
+	paths := s.configMgr.GetPlaceholderImagePaths()
+	var targetPath string
+	for _, path := range paths {
+		if extractPlaceholderID(path) == id {
+			targetPath = path
+			break
+		}
+	}
+
+	if targetPath == "" {
+		http.Error(w, "Image not found", http.StatusNotFound)
+		return
+	}
+
+	// Remove file
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		log.Error().Err(err).Str("path", targetPath).Msg("Failed to delete placeholder file")
+		http.Error(w, "Failed to delete image: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Remove from config
+	if err := s.configMgr.RemovePlaceholderImage(targetPath); err != nil {
+		log.Error().Err(err).Msg("Failed to update config")
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info().Str("id", id).Msg("Placeholder image deleted")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
 func (s *Server) handleGetStandby(w http.ResponseWriter, r *http.Request) {
 	enabled := s.windowMgr.GetForceStandby()
 	w.Header().Set("Content-Type", "application/json")
@@ -516,6 +728,18 @@ func (s *Server) handleToggleStandby(w http.ResponseWriter, r *http.Request) {
 		"enabled": newState,
 		"status":  "success",
 	})
+}
+
+func (s *Server) handleNextPlaceholder(w http.ResponseWriter, r *http.Request) {
+	s.windowMgr.CyclePlaceholder(1)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handlePrevPlaceholder(w http.ResponseWriter, r *http.Request) {
+	s.windowMgr.CyclePlaceholder(-1)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 func (s *Server) handleGetZoom(w http.ResponseWriter, r *http.Request) {

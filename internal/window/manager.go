@@ -79,6 +79,10 @@ type Manager struct {
 	cachedPlaceholder     *image.RGBA
 	cachedPlaceholderPath string // Path used to generate cached placeholder
 	cachedPlaceholderSize image.Point
+
+	// Placeholder rotation state
+	wasInStandby          bool // True if previous frame was showing placeholder
+	currentPlaceholderIdx int  // Index of currently selected placeholder (-1 = default)
 }
 
 // NewManager creates a new window manager with auto-detected backend
@@ -686,17 +690,30 @@ func (m *Manager) streamLoop(fps int) {
 func (m *Manager) captureAndStream() {
 	log := logger.WithComponent("stream")
 
+	// Track whether this frame shows standby/placeholder
+	showingStandby := false
+
 	// Check if force standby is enabled
 	m.streamMu.Lock()
 	forceStandby := m.forceStandby
+	wasInStandby := m.wasInStandby
 	m.streamMu.Unlock()
 
 	if forceStandby {
+		showingStandby = true
+		// Detect transition TO standby for rotation
+		if !wasInStandby {
+			m.rotatePlaceholder()
+		}
 		if m.output != nil {
 			cfg := m.configMgr.Get()
 			placeholder := m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
 			m.output.WriteFrame(placeholder)
 		}
+		// Update wasInStandby before returning
+		m.streamMu.Lock()
+		m.wasInStandby = showingStandby
+		m.streamMu.Unlock()
 		return
 	}
 
@@ -705,13 +722,36 @@ func (m *Manager) captureAndStream() {
 	currentWin := m.currentWindow
 	m.mu.RUnlock()
 
+	// Check if window is on current desktop
+	// Desktop -1 means window is on all desktops (sticky)
+	if currentWin != nil {
+		currentDesktop := m.backend.GetCurrentDesktop()
+		if currentWin.Desktop != -1 && currentWin.Desktop != currentDesktop {
+			log.Debug().
+				Int("window_desktop", currentWin.Desktop).
+				Int("current_desktop", currentDesktop).
+				Str("window_class", currentWin.Class).
+				Msg("Window not on current desktop, treating as unfocused")
+			currentWin = nil
+		}
+	}
+
 	if currentWin == nil {
-		// No window focused - send placeholder
+		// No window focused (or not on current desktop) - send placeholder
+		showingStandby = true
+		// Detect transition TO standby for rotation
+		if !wasInStandby {
+			m.rotatePlaceholder()
+		}
 		if m.output != nil {
 			cfg := m.configMgr.Get()
 			placeholder := m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
 			m.output.WriteFrame(placeholder)
 		}
+		// Update wasInStandby before returning
+		m.streamMu.Lock()
+		m.wasInStandby = showingStandby
+		m.streamMu.Unlock()
 		return
 	}
 
@@ -742,12 +782,23 @@ func (m *Manager) captureAndStream() {
 				m.streamMu.Unlock()
 				usePlaceholder = true
 			} else {
+				// Check if last allowed window is on current desktop
+				currentDesktop := m.backend.GetCurrentDesktop()
+				lastAllowedOnCurrentDesktop := lastAllowed.Desktop == -1 || lastAllowed.Desktop == currentDesktop
+
 				// Different window - re-verify the last allowed window is still allowlisted
-				// (its title might have changed)
-				if m.IsWindowAllowlisted(lastAllowed) {
+				// and on the current desktop
+				if lastAllowedOnCurrentDesktop && m.IsWindowAllowlisted(lastAllowed) {
 					windowToCapture = lastAllowed
 				} else {
-					// Last allowed window no longer matches - clear it
+					// Last allowed window no longer matches or not on current desktop - clear it
+					if !lastAllowedOnCurrentDesktop {
+						log.Debug().
+							Int("window_desktop", lastAllowed.Desktop).
+							Int("current_desktop", currentDesktop).
+							Str("window_class", lastAllowed.Class).
+							Msg("Last allowed window not on current desktop")
+					}
 					m.streamMu.Lock()
 					m.lastAllowedWindow = nil
 					m.streamMu.Unlock()
@@ -763,6 +814,11 @@ func (m *Manager) captureAndStream() {
 	var img *image.RGBA
 
 	if usePlaceholder {
+		showingStandby = true
+		// Detect transition TO standby for rotation
+		if !wasInStandby {
+			m.rotatePlaceholder()
+		}
 		// Create and send placeholder frame
 		cfg := m.configMgr.Get()
 		img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
@@ -805,6 +861,11 @@ func (m *Manager) captureAndStream() {
 
 		// If capture failed, clear lastAllowedWindow and send placeholder
 		if img == nil {
+			showingStandby = true
+			// Detect transition TO standby for rotation
+			if !wasInStandby {
+				m.rotatePlaceholder()
+			}
 			m.streamMu.Lock()
 			m.lastAllowedWindow = nil
 			m.streamMu.Unlock()
@@ -837,17 +898,31 @@ func (m *Manager) captureAndStream() {
 			Err(err).
 			Msg("Failed to write frame to output")
 	}
+
+	// Update wasInStandby for next frame's transition detection
+	m.streamMu.Lock()
+	m.wasInStandby = showingStandby
+	m.streamMu.Unlock()
 }
 
 // createPlaceholderFrame creates a placeholder frame with a large centered target symbol
 // when no allowlisted window has been focused yet
 func (m *Manager) createPlaceholderFrame(width, height int) *image.RGBA {
-	cfg := m.configMgr.Get()
+	// Get the current placeholder path based on index
+	paths := m.configMgr.GetPlaceholderImagePaths()
+	m.streamMu.Lock()
+	idx := m.currentPlaceholderIdx
+	m.streamMu.Unlock()
+
+	var currentPath string
+	if idx >= 0 && idx < len(paths) {
+		currentPath = paths[idx]
+	}
 
 	// Check if we can use cached placeholder
 	m.streamMu.Lock()
 	if m.cachedPlaceholder != nil &&
-		m.cachedPlaceholderPath == cfg.PlaceholderImagePath &&
+		m.cachedPlaceholderPath == currentPath &&
 		m.cachedPlaceholderSize.X == width &&
 		m.cachedPlaceholderSize.Y == height {
 		cached := m.cachedPlaceholder
@@ -860,18 +935,18 @@ func (m *Manager) createPlaceholderFrame(width, height int) *image.RGBA {
 	log.Debug().Msg("Generating new placeholder frame")
 
 	// Try to load custom placeholder image if configured
-	if cfg.PlaceholderImagePath != "" {
-		if customImg, err := m.loadAndResizeImage(cfg.PlaceholderImagePath, width, height); err == nil {
-			log.Debug().Str("path", cfg.PlaceholderImagePath).Msg("Using custom placeholder image")
+	if currentPath != "" {
+		if customImg, err := m.loadAndResizeImage(currentPath, width, height); err == nil {
+			log.Debug().Str("path", currentPath).Int("index", idx).Msg("Using custom placeholder image")
 			// Cache it
 			m.streamMu.Lock()
 			m.cachedPlaceholder = customImg
-			m.cachedPlaceholderPath = cfg.PlaceholderImagePath
+			m.cachedPlaceholderPath = currentPath
 			m.cachedPlaceholderSize = image.Point{X: width, Y: height}
 			m.streamMu.Unlock()
 			return customImg
 		} else {
-			log.Warn().Err(err).Str("path", cfg.PlaceholderImagePath).Msg("Failed to load custom placeholder, using default")
+			log.Warn().Err(err).Str("path", currentPath).Msg("Failed to load custom placeholder, using default")
 		}
 	}
 
@@ -1007,11 +1082,64 @@ func (m *Manager) GetForceStandby() bool {
 // ToggleForceStandby toggles the force standby mode and returns the new state
 func (m *Manager) ToggleForceStandby() bool {
 	m.streamMu.Lock()
+	wasInStandby := m.wasInStandby
 	m.forceStandby = !m.forceStandby
 	newState := m.forceStandby
 	m.streamMu.Unlock()
+
+	// If turning ON standby and we weren't already showing placeholder, rotate
+	if newState && !wasInStandby {
+		m.rotatePlaceholder()
+	}
+
 	logger.WithComponent("stream").Info().Bool("enabled", newState).Msg("Force standby mode toggled")
 	return newState
+}
+
+// rotatePlaceholder cycles to the next placeholder image
+// Called only on transition TO standby mode
+func (m *Manager) rotatePlaceholder() {
+	m.CyclePlaceholder(1)
+}
+
+// CyclePlaceholder cycles the placeholder by the given direction (+1 for next, -1 for prev)
+func (m *Manager) CyclePlaceholder(direction int) {
+	paths := m.configMgr.GetPlaceholderImagePaths()
+	log := logger.WithComponent("placeholder")
+
+	if len(paths) == 0 {
+		m.streamMu.Lock()
+		m.currentPlaceholderIdx = -1
+		m.cachedPlaceholder = nil // Invalidate cache
+		m.streamMu.Unlock()
+		log.Debug().Msg("No placeholder images configured, using default")
+		return
+	}
+
+	if len(paths) == 1 {
+		m.streamMu.Lock()
+		if m.currentPlaceholderIdx != 0 {
+			m.currentPlaceholderIdx = 0
+			m.cachedPlaceholder = nil // Invalidate cache
+		}
+		m.streamMu.Unlock()
+		log.Debug().Str("path", paths[0]).Msg("Single placeholder image, no cycling needed")
+		return
+	}
+
+	// Cycle in the given direction
+	m.streamMu.Lock()
+	currentIdx := m.currentPlaceholderIdx
+	newIdx := (currentIdx + direction + len(paths)) % len(paths)
+	m.currentPlaceholderIdx = newIdx
+	m.cachedPlaceholder = nil // Invalidate cache to force reload
+	m.streamMu.Unlock()
+
+	log.Debug().
+		Int("new_index", newIdx).
+		Int("direction", direction).
+		Str("path", paths[newIdx]).
+		Msg("Cycled placeholder image")
 }
 
 // GetZoomState returns the current zoom state

@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import './PlaceholderUpload.css'
 
-function PlaceholderUpload({ currentPath, onUpload, onDelete }) {
+function PlaceholderUpload({ images, onUpload, onDelete }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [dragActive, setDragActive] = useState(false)
@@ -36,8 +36,11 @@ function PlaceholderUpload({ currentPath, onUpload, onDelete }) {
   }
 
   const handleInputChange = (e) => {
-    const file = e.target.files?.[0]
-    handleFileSelect(file)
+    const files = e.target.files
+    if (files) {
+      // Handle multiple files
+      Array.from(files).forEach(file => handleFileSelect(file))
+    }
     // Reset input so the same file can be selected again
     e.target.value = ''
   }
@@ -57,14 +60,16 @@ function PlaceholderUpload({ currentPath, onUpload, onDelete }) {
     e.stopPropagation()
     setDragActive(false)
 
-    const file = e.dataTransfer.files?.[0]
-    handleFileSelect(file)
+    const files = e.dataTransfer.files
+    if (files) {
+      Array.from(files).forEach(file => handleFileSelect(file))
+    }
   }
 
-  const handleDelete = async () => {
+  const handleDelete = async (id) => {
     setError(null)
     try {
-      await onDelete()
+      await onDelete(id)
     } catch (err) {
       setError(err.message || 'Delete failed')
     }
@@ -77,7 +82,8 @@ function PlaceholderUpload({ currentPath, onUpload, onDelete }) {
   return (
     <div className="placeholder-upload">
       <p className="description">
-        Set a custom image to display when no allowlisted window is focused.
+        Set custom images to display when no allowlisted window is focused.
+        Images will cycle in order on each standby transition.
       </p>
 
       {error && (
@@ -87,35 +93,28 @@ function PlaceholderUpload({ currentPath, onUpload, onDelete }) {
         </div>
       )}
 
-      {currentPath ? (
-        <div className="current-placeholder">
-          <div className="preview-container">
+      <div className="placeholder-grid">
+        {/* Display existing images */}
+        {images.map((img) => (
+          <div key={img.id} className="placeholder-item">
             <img
-              src={`/api/config/placeholder-image?t=${Date.now()}`}
-              alt="Current placeholder"
-              className="preview-image"
+              src={`/api/config/placeholder-images/${img.id}?t=${Date.now()}`}
+              alt="Placeholder"
+              className="placeholder-preview"
             />
-          </div>
-          <div className="placeholder-actions">
             <button
-              className="btn btn-secondary"
-              onClick={triggerFileSelect}
-              disabled={uploading}
+              className="delete-btn"
+              onClick={() => handleDelete(img.id)}
+              title="Remove image"
             >
-              {uploading ? 'Uploading...' : 'Change Image'}
-            </button>
-            <button
-              className="btn btn-danger"
-              onClick={handleDelete}
-              disabled={uploading}
-            >
-              Remove
+              ×
             </button>
           </div>
-        </div>
-      ) : (
+        ))}
+
+        {/* Add new image tile */}
         <div
-          className={`drop-zone ${dragActive ? 'drag-active' : ''}`}
+          className={`placeholder-item add-new ${dragActive ? 'drag-active' : ''}`}
           onDragEnter={handleDrag}
           onDragLeave={handleDrag}
           onDragOver={handleDrag}
@@ -126,20 +125,18 @@ function PlaceholderUpload({ currentPath, onUpload, onDelete }) {
             <span className="uploading-text">Uploading...</span>
           ) : (
             <>
-              <span className="drop-icon">📷</span>
-              <span className="drop-text">
-                Drag & drop an image here, or click to select
-              </span>
-              <span className="drop-hint">PNG, JPEG, or GIF (max 10MB)</span>
+              <span className="add-icon">+</span>
+              <span className="add-text">Add Image</span>
             </>
           )}
         </div>
-      )}
+      </div>
 
       <input
         ref={fileInputRef}
         type="file"
         accept="image/png,image/jpeg,image/gif"
+        multiple
         onChange={handleInputChange}
         className="file-input-hidden"
       />

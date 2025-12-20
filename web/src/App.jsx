@@ -13,6 +13,7 @@ function App() {
   const [selectedApp, setSelectedApp] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [placeholderImages, setPlaceholderImages] = useState([])
 
   // Fetch applications
   const fetchApplications = async () => {
@@ -62,6 +63,19 @@ function App() {
     }
   }
 
+  // Fetch placeholder images
+  const fetchPlaceholderImages = async () => {
+    try {
+      const response = await fetch('/api/config/placeholder-images')
+      if (response.ok) {
+        const data = await response.json()
+        setPlaceholderImages(data.images || [])
+      }
+    } catch (err) {
+      console.error('Failed to fetch placeholder images:', err)
+    }
+  }
+
   // Initial load
   useEffect(() => {
     const loadData = async () => {
@@ -69,7 +83,8 @@ function App() {
       await Promise.all([
         fetchApplications(),
         fetchConfig(),
-        fetchCurrentWindow()
+        fetchCurrentWindow(),
+        fetchPlaceholderImages()
       ])
       setLoading(false)
     }
@@ -138,7 +153,7 @@ function App() {
     const formData = new FormData()
     formData.append('image', file)
 
-    const response = await fetch('/api/config/placeholder-image', {
+    const response = await fetch('/api/config/placeholder-images', {
       method: 'POST',
       body: formData
     })
@@ -148,12 +163,12 @@ function App() {
       throw new Error(text || 'Upload failed')
     }
 
-    await fetchConfig()
+    await fetchPlaceholderImages()
   }
 
-  // Delete placeholder image
-  const deletePlaceholder = async () => {
-    const response = await fetch('/api/config/placeholder-image', {
+  // Delete placeholder image by ID
+  const deletePlaceholder = async (id) => {
+    const response = await fetch(`/api/config/placeholder-images/${encodeURIComponent(id)}`, {
       method: 'DELETE'
     })
 
@@ -162,7 +177,7 @@ function App() {
       throw new Error(text || 'Delete failed')
     }
 
-    await fetchConfig()
+    await fetchPlaceholderImages()
   }
 
   if (loading) {
@@ -232,7 +247,7 @@ function App() {
           <section className="section">
             <h2>Waiting Screen</h2>
             <PlaceholderUpload
-              currentPath={config?.placeholder_image_path}
+              images={placeholderImages}
               onUpload={uploadPlaceholder}
               onDelete={deletePlaceholder}
             />

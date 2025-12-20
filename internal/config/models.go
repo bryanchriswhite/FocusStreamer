@@ -59,7 +59,8 @@ type Config struct {
 	Overlay                OverlayConfig `json:"overlay" yaml:"overlay"`
 	ServerPort             int           `json:"server_port" yaml:"server_port"`
 	LogLevel               string        `json:"log_level" yaml:"log_level"`
-	PlaceholderImagePath   string        `json:"placeholder_image_path" yaml:"placeholder_image_path"`
+	PlaceholderImagePath   string        `json:"placeholder_image_path" yaml:"placeholder_image_path"`     // Deprecated: use PlaceholderImagePaths
+	PlaceholderImagePaths  []string      `json:"placeholder_image_paths" yaml:"placeholder_image_paths"`   // List of placeholder image paths
 }
 
 // OverlayConfig represents overlay configuration
@@ -180,6 +181,17 @@ func (m *Manager) load() error {
 	}
 	if cfg.Overlay.Widgets == nil {
 		cfg.Overlay.Widgets = []map[string]interface{}{}
+	}
+	if cfg.PlaceholderImagePaths == nil {
+		cfg.PlaceholderImagePaths = []string{}
+	}
+
+	// Migrate old single placeholder path to new slice format
+	if cfg.PlaceholderImagePath != "" && len(cfg.PlaceholderImagePaths) == 0 {
+		cfg.PlaceholderImagePaths = []string{cfg.PlaceholderImagePath}
+		cfg.PlaceholderImagePath = "" // Clear deprecated field
+		logger.WithComponent("config").Info().
+			Msg("Migrated single placeholder image to new multi-image format")
 	}
 
 	m.mu.Lock()
@@ -410,10 +422,58 @@ func (m *Manager) ClearPlaceholderImage() error {
 }
 
 // GetPlaceholderImagePath returns the custom placeholder image path
+// Deprecated: Use GetPlaceholderImagePaths instead
 func (m *Manager) GetPlaceholderImagePath() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config.PlaceholderImagePath
+}
+
+// AddPlaceholderImage adds a placeholder image path to the list
+func (m *Manager) AddPlaceholderImage(path string) error {
+	m.mu.Lock()
+	// Check if already exists (prevent duplicates)
+	for _, p := range m.config.PlaceholderImagePaths {
+		if p == path {
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	m.config.PlaceholderImagePaths = append(m.config.PlaceholderImagePaths, path)
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// RemovePlaceholderImage removes a placeholder image path from the list
+func (m *Manager) RemovePlaceholderImage(path string) error {
+	m.mu.Lock()
+	filtered := make([]string, 0, len(m.config.PlaceholderImagePaths))
+	for _, p := range m.config.PlaceholderImagePaths {
+		if p != path {
+			filtered = append(filtered, p)
+		}
+	}
+	m.config.PlaceholderImagePaths = filtered
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// GetPlaceholderImagePaths returns all placeholder image paths
+func (m *Manager) GetPlaceholderImagePaths() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	// Return a copy to prevent external modification
+	paths := make([]string, len(m.config.PlaceholderImagePaths))
+	copy(paths, m.config.PlaceholderImagePaths)
+	return paths
+}
+
+// ClearAllPlaceholderImages removes all placeholder image paths
+func (m *Manager) ClearAllPlaceholderImages() error {
+	m.mu.Lock()
+	m.config.PlaceholderImagePaths = []string{}
+	m.mu.Unlock()
+	return m.Save()
 }
 
 // SetPort sets the server port

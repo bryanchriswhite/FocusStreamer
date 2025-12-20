@@ -267,9 +267,25 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
             background: rgba(60, 60, 60, 0.95);
             color: #fff;
         }
+        .fade-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
+            opacity: 0;
+            transition: opacity 250ms ease;
+            pointer-events: none;
+            z-index: 500;
+        }
+        .fade-overlay.active {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
+    <div class="fade-overlay" id="fadeOverlay"></div>
     <div class="stream-container">
         <img src="/stream" alt="FocusStreamer Live Stream">
     </div>
@@ -278,6 +294,33 @@ func (m *MJPEGOutput) GetViewerHandler() http.HandlerFunc {
         <a href="/settings" class="nav-link">⚙ Settings</a>
         <a href="/control" class="nav-link">🎛 Control</a>
     </div>
+    <script>
+        // Listen for standby state changes and trigger fade
+        let lastStandbyState = null;
+
+        async function checkStandbyState() {
+            try {
+                const response = await fetch('/api/stream/standby');
+                const data = await response.json();
+
+                if (lastStandbyState !== null && lastStandbyState !== data.enabled) {
+                    // State changed - trigger fade
+                    const overlay = document.getElementById('fadeOverlay');
+                    overlay.classList.add('active');
+                    setTimeout(() => {
+                        overlay.classList.remove('active');
+                    }, 350);
+                }
+                lastStandbyState = data.enabled;
+            } catch (err) {
+                console.error('Failed to check standby state:', err);
+            }
+        }
+
+        // Poll for standby state changes
+        setInterval(checkStandbyState, 500);
+        checkStandbyState();
+    </script>
 </body>
 </html>`
 		w.Write([]byte(html))
@@ -387,6 +430,42 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         }
         .fab:hover + .fab-tooltip {
             opacity: 1;
+        }
+        .cycle-buttons {
+            position: fixed;
+            bottom: 92px;
+            right: 24px;
+            display: flex;
+            gap: 8px;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+        }
+        .cycle-buttons.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .cycle-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(60, 60, 60, 0.9);
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+        }
+        .cycle-btn:hover {
+            background: rgba(80, 80, 80, 0.95);
+            transform: scale(1.1);
+        }
+        .cycle-btn:active {
+            transform: scale(0.95);
         }
         .nav-trigger {
             position: fixed;
@@ -502,6 +581,10 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         <img id="streamImg" src="/stream" alt="FocusStreamer Live Stream">
     </div>
     <div class="fade-overlay" id="fadeOverlay"></div>
+    <div class="cycle-buttons" id="cycleButtons">
+        <button class="cycle-btn" onclick="cyclePrev()" title="Previous Image">◀</button>
+        <button class="cycle-btn" onclick="cycleNext()" title="Next Image">▶</button>
+    </div>
     <button class="fab" id="standbyBtn" onclick="toggleStandby()" title="Toggle Standby">⏸</button>
     <div class="fab-tooltip" id="tooltip">Toggle Standby</div>
     <div class="nav-trigger"></div>
@@ -771,15 +854,55 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         function updateButton() {
             const btn = document.getElementById('standbyBtn');
             const tooltip = document.getElementById('tooltip');
+            const cycleButtons = document.getElementById('cycleButtons');
             if (isStandby) {
                 btn.classList.add('standby');
                 btn.innerHTML = '⏺';
                 tooltip.textContent = 'Resume Stream';
+                cycleButtons.classList.add('visible');
             } else {
                 btn.classList.remove('standby');
                 btn.innerHTML = '⏸';
                 tooltip.textContent = 'Show Standby';
+                cycleButtons.classList.remove('visible');
             }
+        }
+
+        let isCycling = false;
+
+        function cyclePlaceholder(direction) {
+            if (isCycling) return;
+            isCycling = true;
+
+            const overlay = document.getElementById('fadeOverlay');
+            overlay.classList.add('active');
+
+            overlay.addEventListener('transitionend', function onFadeIn(e) {
+                if (e.propertyName !== 'opacity') return;
+                overlay.removeEventListener('transitionend', onFadeIn);
+
+                const endpoint = direction === 'next' ? '/api/stream/placeholder/next' : '/api/stream/placeholder/prev';
+                fetch(endpoint, { method: 'POST' })
+                    .then(() => {
+                        setTimeout(() => {
+                            overlay.classList.remove('active');
+                            isCycling = false;
+                        }, 350);
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        overlay.classList.remove('active');
+                        isCycling = false;
+                    });
+            });
+        }
+
+        function cyclePrev() {
+            cyclePlaceholder('prev');
+        }
+
+        function cycleNext() {
+            cyclePlaceholder('next');
         }
     </script>
 </body>
