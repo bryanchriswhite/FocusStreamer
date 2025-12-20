@@ -36,15 +36,19 @@ type KWinBackend struct {
 	// Cache for KWin script-based active window detection
 	cachedActiveUUID     string
 	cachedActiveUUIDTime time.Time
+	// Channel for desktop change events to trigger immediate focus check
+	desktopChangeChan chan struct{}
 }
 
 // KWin D-Bus constants
 const (
-	kwinService         = "org.kde.KWin"
-	kwinPath            = "/KWin"
-	kwinInterface       = "org.kde.KWin"
-	windowsRunnerPath   = "/WindowsRunner"
-	krunnerInterface    = "org.kde.krunner1"
+	kwinService                    = "org.kde.KWin"
+	kwinPath                       = "/KWin"
+	kwinInterface                  = "org.kde.KWin"
+	windowsRunnerPath              = "/WindowsRunner"
+	krunnerInterface               = "org.kde.krunner1"
+	virtualDesktopManagerPath      = "/VirtualDesktopManager"
+	virtualDesktopManagerInterface = "org.kde.KWin.VirtualDesktopManager"
 )
 
 // NewKWinBackend creates a new KWin D-Bus backend
@@ -215,6 +219,9 @@ func (b *KWinBackend) getWindowInfoKdotool(windowID string) (*config.WindowInfo,
 		isNativeWayland = false
 	}
 
+	// Get window desktop
+	desktop := b.getWindowDesktopFromDBus(windowPath)
+
 	return &config.WindowInfo{
 		ID:              id,
 		Title:           name,
@@ -223,6 +230,7 @@ func (b *KWinBackend) getWindowInfoKdotool(windowID string) (*config.WindowInfo,
 		Focused:         false,
 		Geometry:        geometry,
 		IsNativeWayland: isNativeWayland,
+		Desktop:         desktop,
 	}, nil
 }
 
@@ -1086,11 +1094,16 @@ func (b *KWinBackend) getWindowInfoFromDBus(clientPath string) (*config.WindowIn
 		}
 	}
 
+	// Get window desktop
+	info.Desktop = b.getWindowDesktopFromDBus(clientPath)
+
 	return info, nil
 }
 
 // WatchFocus starts watching for focus changes
 func (b *KWinBackend) WatchFocus(callback func(*config.WindowInfo)) error {
+	log := logger.WithComponent("kwin-backend")
+
 	b.mu.Lock()
 	if b.watching {
 		b.mu.Unlock()
@@ -1098,13 +1111,75 @@ func (b *KWinBackend) WatchFocus(callback func(*config.WindowInfo)) error {
 	}
 	b.watching = true
 	b.stopChan = make(chan struct{})
+	b.desktopChangeChan = make(chan struct{}, 1) // Buffered to avoid blocking signal handler
 	b.mu.Unlock()
+
+	// Set up D-Bus signal matching for desktop changes
+	if err := b.conn.AddMatchSignal(
+		dbus.WithMatchInterface(virtualDesktopManagerInterface),
+		dbus.WithMatchMember("currentChanged"),
+	); err != nil {
+		log.Warn().Err(err).Msg("Failed to add match for VirtualDesktopManager.currentChanged signal")
+	} else {
+		log.Debug().Msg("Subscribed to VirtualDesktopManager.currentChanged signal")
+	}
+
+	// Also match showingDesktopChanged for "Show Desktop" mode
+	if err := b.conn.AddMatchSignal(
+		dbus.WithMatchInterface(kwinInterface),
+		dbus.WithMatchMember("showingDesktopChanged"),
+	); err != nil {
+		log.Warn().Err(err).Msg("Failed to add match for KWin.showingDesktopChanged signal")
+	} else {
+		log.Debug().Msg("Subscribed to KWin.showingDesktopChanged signal")
+	}
+
+	// Start goroutine to listen for D-Bus signals
+	go b.watchDesktopSignals()
 
 	go b.watchFocusLoop(callback)
 	return nil
 }
 
-// watchFocusLoop watches for focus changes via polling
+// watchDesktopSignals listens for D-Bus signals related to desktop changes
+func (b *KWinBackend) watchDesktopSignals() {
+	log := logger.WithComponent("kwin-backend")
+	signalChan := make(chan *dbus.Signal, 10)
+	b.conn.Signal(signalChan)
+
+	for {
+		select {
+		case <-b.stopChan:
+			b.conn.RemoveSignal(signalChan)
+			return
+		case sig := <-signalChan:
+			if sig == nil {
+				continue
+			}
+
+			// Check if this is a desktop-related signal
+			switch sig.Name {
+			case virtualDesktopManagerInterface + ".currentChanged":
+				log.Debug().Msg("Desktop switched, triggering focus re-evaluation")
+				b.triggerDesktopChange()
+			case kwinInterface + ".showingDesktopChanged":
+				log.Debug().Msg("Show desktop state changed, triggering focus re-evaluation")
+				b.triggerDesktopChange()
+			}
+		}
+	}
+}
+
+// triggerDesktopChange notifies the focus loop to re-check immediately
+func (b *KWinBackend) triggerDesktopChange() {
+	select {
+	case b.desktopChangeChan <- struct{}{}:
+	default:
+		// Channel already has a pending notification, skip
+	}
+}
+
+// watchFocusLoop watches for focus changes via polling and desktop change events
 func (b *KWinBackend) watchFocusLoop(callback func(*config.WindowInfo)) {
 	log := logger.WithComponent("kwin-backend")
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -1118,32 +1193,40 @@ func (b *KWinBackend) watchFocusLoop(callback func(*config.WindowInfo)) {
 		callback(info)
 	}
 
+	checkFocus := func() {
+		info, err := b.GetFocusedWindow()
+		if err != nil {
+			log.Debug().Err(err).Msg("Failed to get focused window")
+			return
+		}
+
+		b.mu.Lock()
+		// Detect changes in window ID, title, or geometry
+		changed := b.currentWindow == nil ||
+			b.currentWindow.ID != info.ID ||
+			b.currentWindow.Title != info.Title ||
+			b.currentWindow.Geometry != info.Geometry
+		if changed {
+			b.currentWindow = info
+		}
+		b.mu.Unlock()
+
+		if changed {
+			callback(info)
+		}
+	}
+
 	for {
 		select {
 		case <-b.stopChan:
 			return
+		case <-b.desktopChangeChan:
+			// Desktop switched - immediate focus re-evaluation
+			log.Debug().Msg("Processing desktop change event")
+			checkFocus()
 		case <-ticker.C:
-			// Poll for focus changes
-			info, err := b.GetFocusedWindow()
-			if err != nil {
-				log.Debug().Err(err).Msg("Failed to get focused window")
-				continue
-			}
-
-			b.mu.Lock()
-			// Detect changes in window ID, title, or geometry
-			changed := b.currentWindow == nil ||
-				b.currentWindow.ID != info.ID ||
-				b.currentWindow.Title != info.Title ||
-				b.currentWindow.Geometry != info.Geometry
-			if changed {
-				b.currentWindow = info
-			}
-			b.mu.Unlock()
-
-			if changed {
-				callback(info)
-			}
+			// Regular polling
+			checkFocus()
 		}
 	}
 }
@@ -1157,6 +1240,134 @@ func (b *KWinBackend) StopWatching() {
 		close(b.stopChan)
 		b.watching = false
 	}
+}
+
+// GetCurrentDesktop returns the current virtual desktop number
+func (b *KWinBackend) GetCurrentDesktop() int {
+	// Get current desktop UUID from VirtualDesktopManager
+	obj := b.conn.Object(kwinService, virtualDesktopManagerPath)
+	currentProp, err := obj.GetProperty(virtualDesktopManagerInterface + ".current")
+	if err != nil {
+		return 0
+	}
+
+	currentUUID, ok := currentProp.Value().(string)
+	if !ok || currentUUID == "" {
+		return 0
+	}
+
+	// Get desktops list to find the index
+	return b.desktopUUIDToIndex(currentUUID)
+}
+
+// desktopUUIDToIndex converts a desktop UUID to its index number
+func (b *KWinBackend) desktopUUIDToIndex(uuid string) int {
+	obj := b.conn.Object(kwinService, virtualDesktopManagerPath)
+	desktopsProp, err := obj.GetProperty(virtualDesktopManagerInterface + ".desktops")
+	if err != nil {
+		return 0
+	}
+
+	// desktops is a list of (uint32 index, string uuid, string name)
+	desktops, ok := desktopsProp.Value().([][]interface{})
+	if !ok {
+		// Try alternative format: []struct
+		if v := desktopsProp.Value(); v != nil {
+			// Use reflection to iterate
+			switch dv := v.(type) {
+			case []interface{}:
+				for _, d := range dv {
+					if tuple, ok := d.([]interface{}); ok && len(tuple) >= 2 {
+						if idx, ok := tuple[0].(uint32); ok {
+							if desktopUUID, ok := tuple[1].(string); ok {
+								if desktopUUID == uuid {
+									return int(idx)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return 0
+	}
+
+	for _, d := range desktops {
+		if len(d) >= 2 {
+			if idx, ok := d[0].(uint32); ok {
+				if desktopUUID, ok := d[1].(string); ok {
+					if desktopUUID == uuid {
+						return int(idx)
+					}
+				}
+			}
+		}
+	}
+
+	return 0
+}
+
+// getWindowDesktopFromDBus gets the desktop number for a window via D-Bus
+func (b *KWinBackend) getWindowDesktopFromDBus(windowPath string) int {
+	obj := b.conn.Object(kwinService, dbus.ObjectPath(windowPath))
+
+	// Try different interface names
+	interfaces := []string{
+		"org.kde.KWin.Window", // KWin6
+		"org.kde.KWin.Client", // KWin5
+	}
+
+	for _, iface := range interfaces {
+		desktopsProp, err := obj.GetProperty(iface + ".desktops")
+		if err != nil {
+			continue
+		}
+
+		// desktops is a list of desktop UUIDs
+		switch v := desktopsProp.Value().(type) {
+		case []string:
+			if len(v) > 0 {
+				return b.desktopUUIDToIndex(v[0])
+			}
+		case []interface{}:
+			if len(v) > 0 {
+				if uuid, ok := v[0].(string); ok {
+					return b.desktopUUIDToIndex(uuid)
+				}
+			}
+		}
+	}
+
+	// -1 means on all desktops (sticky) if we can't determine
+	return 0
+}
+
+// getWindowDesktopFromQueryInfo gets desktop from queryWindowInfo for active window
+func (b *KWinBackend) getWindowDesktopFromQueryInfo() int {
+	obj := b.conn.Object(kwinService, kwinPath)
+
+	var result map[string]dbus.Variant
+	err := obj.Call(kwinInterface+".queryWindowInfo", 0).Store(&result)
+	if err != nil {
+		return 0
+	}
+
+	if desktopsVar, ok := result["desktops"]; ok {
+		switch v := desktopsVar.Value().(type) {
+		case []string:
+			if len(v) > 0 {
+				return b.desktopUUIDToIndex(v[0])
+			}
+		case []interface{}:
+			if len(v) > 0 {
+				if uuid, ok := v[0].(string); ok {
+					return b.desktopUUIDToIndex(uuid)
+				}
+			}
+		}
+	}
+
+	return 0
 }
 
 // hashStringToUint32 creates a simple hash of a string to uint32

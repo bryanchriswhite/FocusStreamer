@@ -18,6 +18,9 @@ type Backend interface {
 	// GetFocusedWindow returns the currently focused window
 	GetFocusedWindow() (*config.WindowInfo, error)
 
+	// GetCurrentDesktop returns the current virtual desktop number
+	GetCurrentDesktop() int
+
 	// WatchFocus starts watching for focus changes and calls the callback
 	// when the focused window changes. This should be called in a goroutine.
 	WatchFocus(callback func(*config.WindowInfo)) error

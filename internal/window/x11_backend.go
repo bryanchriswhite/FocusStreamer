@@ -21,6 +21,10 @@ type X11Backend struct {
 	currentWindow *config.WindowInfo
 	stopChan      chan struct{}
 	watching      bool
+	// Atoms for desktop change detection
+	currentDesktopAtom xproto.Atom
+	// Channel for desktop change events to trigger immediate focus check
+	desktopChangeChan chan struct{}
 }
 
 // NewX11Backend creates a new X11 backend
@@ -34,11 +38,19 @@ func NewX11Backend() (*X11Backend, error) {
 	screen := setup.DefaultScreen(conn)
 	root := screen.Root
 
+	// Get _NET_CURRENT_DESKTOP atom for desktop change detection
+	var currentDesktopAtom xproto.Atom
+	atomReply, err := xproto.InternAtom(conn, false, uint16(len("_NET_CURRENT_DESKTOP")), "_NET_CURRENT_DESKTOP").Reply()
+	if err == nil && atomReply != nil {
+		currentDesktopAtom = atomReply.Atom
+	}
+
 	return &X11Backend{
-		conn:     conn,
-		root:     root,
-		screen:   screen,
-		stopChan: make(chan struct{}),
+		conn:               conn,
+		root:               root,
+		screen:             screen,
+		stopChan:           make(chan struct{}),
+		currentDesktopAtom: currentDesktopAtom,
 	}, nil
 }
 
@@ -229,6 +241,8 @@ func (b *X11Backend) GetFocusedWindow() (*config.WindowInfo, error) {
 
 // WatchFocus starts watching for focus changes
 func (b *X11Backend) WatchFocus(callback func(*config.WindowInfo)) error {
+	log := logger.WithComponent("x11-backend")
+
 	b.mu.Lock()
 	if b.watching {
 		b.mu.Unlock()
@@ -236,6 +250,7 @@ func (b *X11Backend) WatchFocus(callback func(*config.WindowInfo)) error {
 	}
 	b.watching = true
 	b.stopChan = make(chan struct{})
+	b.desktopChangeChan = make(chan struct{}, 1) // Buffered to avoid blocking event handler
 	b.mu.Unlock()
 
 	// Subscribe to window focus events on root
@@ -249,11 +264,61 @@ func (b *X11Backend) WatchFocus(callback func(*config.WindowInfo)) error {
 		return fmt.Errorf("failed to set event mask: %w", err)
 	}
 
+	// Start goroutine to listen for X11 property change events
+	if b.currentDesktopAtom != 0 {
+		go b.watchDesktopEvents()
+		log.Debug().Msg("Started watching for desktop change events")
+	}
+
 	go b.watchFocusLoop(callback)
 	return nil
 }
 
-// watchFocusLoop polls for focus changes
+// watchDesktopEvents listens for X11 PropertyNotify events on the root window
+func (b *X11Backend) watchDesktopEvents() {
+	log := logger.WithComponent("x11-backend")
+
+	for {
+		select {
+		case <-b.stopChan:
+			return
+		default:
+		}
+
+		// Poll for events with a short timeout to allow checking stopChan
+		ev, err := b.conn.PollForEvent()
+		if err != nil {
+			// Connection error - exit
+			log.Debug().Err(err).Msg("X11 event poll error")
+			return
+		}
+
+		if ev == nil {
+			// No event available, sleep briefly
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+
+		// Check if this is a PropertyNotify for _NET_CURRENT_DESKTOP
+		if propNotify, ok := ev.(xproto.PropertyNotifyEvent); ok {
+			if propNotify.Atom == b.currentDesktopAtom {
+				log.Debug().Msg("Desktop switched via X11, triggering focus re-evaluation")
+				b.triggerDesktopChange()
+			}
+		}
+	}
+}
+
+// triggerDesktopChange notifies the focus loop to re-check immediately
+func (b *X11Backend) triggerDesktopChange() {
+	select {
+	case b.desktopChangeChan <- struct{}{}:
+	default:
+		// Channel already has a pending notification, skip
+	}
+}
+
+// watchFocusLoop polls for focus changes and responds to desktop change events
 func (b *X11Backend) watchFocusLoop(callback func(*config.WindowInfo)) {
 	log := logger.WithComponent("x11-backend")
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -267,32 +332,40 @@ func (b *X11Backend) watchFocusLoop(callback func(*config.WindowInfo)) {
 		callback(info)
 	}
 
+	checkFocus := func() {
+		info, err := b.GetFocusedWindow()
+		if err != nil {
+			log.Debug().Err(err).Msg("Failed to get focused window")
+			return
+		}
+
+		b.mu.Lock()
+		// Detect changes in window ID, title, or geometry
+		changed := b.currentWindow == nil ||
+			b.currentWindow.ID != info.ID ||
+			b.currentWindow.Title != info.Title ||
+			b.currentWindow.Geometry != info.Geometry
+		if changed {
+			b.currentWindow = info
+		}
+		b.mu.Unlock()
+
+		if changed {
+			callback(info)
+		}
+	}
+
 	for {
 		select {
 		case <-b.stopChan:
 			return
+		case <-b.desktopChangeChan:
+			// Desktop switched - immediate focus re-evaluation
+			log.Debug().Msg("Processing desktop change event")
+			checkFocus()
 		case <-ticker.C:
-			// Poll focus
-			info, err := b.GetFocusedWindow()
-			if err != nil {
-				log.Debug().Err(err).Msg("Failed to get focused window")
-				continue
-			}
-
-			b.mu.Lock()
-			// Detect changes in window ID, title, or geometry
-			changed := b.currentWindow == nil ||
-				b.currentWindow.ID != info.ID ||
-				b.currentWindow.Title != info.Title ||
-				b.currentWindow.Geometry != info.Geometry
-			if changed {
-				b.currentWindow = info
-			}
-			b.mu.Unlock()
-
-			if changed {
-				callback(info)
-			}
+			// Regular polling
+			checkFocus()
 		}
 	}
 }
@@ -306,6 +379,63 @@ func (b *X11Backend) StopWatching() {
 		close(b.stopChan)
 		b.watching = false
 	}
+}
+
+// GetCurrentDesktop returns the current virtual desktop number
+func (b *X11Backend) GetCurrentDesktop() int {
+	if b.currentDesktopAtom == 0 {
+		return 0
+	}
+
+	reply, err := xproto.GetProperty(
+		b.conn,
+		false,
+		b.root,
+		b.currentDesktopAtom,
+		xproto.AtomCardinal,
+		0,
+		1,
+	).Reply()
+	if err != nil || len(reply.Value) < 4 {
+		return 0
+	}
+
+	return int(uint32(reply.Value[0]) |
+		uint32(reply.Value[1])<<8 |
+		uint32(reply.Value[2])<<16 |
+		uint32(reply.Value[3])<<24)
+}
+
+// getWindowDesktop returns the desktop number for a window (-1 means sticky/all desktops)
+func (b *X11Backend) getWindowDesktop(win xproto.Window) int {
+	desktopAtom, err := b.getAtom("_NET_WM_DESKTOP")
+	if err != nil {
+		return 0
+	}
+
+	reply, err := xproto.GetProperty(
+		b.conn,
+		false,
+		win,
+		desktopAtom,
+		xproto.AtomCardinal,
+		0,
+		1,
+	).Reply()
+	if err != nil || len(reply.Value) < 4 {
+		return 0
+	}
+
+	desktop := int(uint32(reply.Value[0]) |
+		uint32(reply.Value[1])<<8 |
+		uint32(reply.Value[2])<<16 |
+		uint32(reply.Value[3])<<24)
+
+	// 0xFFFFFFFF means the window is on all desktops (sticky)
+	if desktop == 0xFFFFFFFF || desktop == -1 {
+		return -1
+	}
+	return desktop
 }
 
 // getWindowInfo retrieves information about a window
@@ -378,6 +508,9 @@ func (b *X11Backend) getWindowInfo(win xproto.Window) (*config.WindowInfo, error
 				uint32(pidReply.Value[3])<<24)
 		}
 	}
+
+	// Get window desktop
+	info.Desktop = b.getWindowDesktop(win)
 
 	return info, nil
 }

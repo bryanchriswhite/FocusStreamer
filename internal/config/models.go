@@ -39,6 +39,7 @@ type WindowInfo struct {
 	Focused         bool     `json:"focused" mapstructure:"focused"`
 	Geometry        Geometry `json:"geometry" mapstructure:"geometry"`
 	IsNativeWayland bool     `json:"is_native_wayland" mapstructure:"is_native_wayland"` // True for native Wayland windows (no X11 ID)
+	Desktop         int      `json:"desktop" mapstructure:"desktop"`                     // Virtual desktop number (-1 means all desktops/sticky)
 }
 
 // Geometry represents window geometry
