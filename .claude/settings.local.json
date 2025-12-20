@@ -10,7 +10,18 @@
       "Bash(curl:*)",
       "Bash(killall:*)",
       "Bash(go run:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(qdbus6:*)",
+      "Bash(qdbus:*)",
+      "Bash(xprop:*)",
+      "WebSearch",
+      "WebFetch(domain:flatpak.github.io)",
+      "WebFetch(domain:docs.pipewire.org)",
+      "Bash(pgrep:*)",
+      "Bash(gdbus call:*)",
+      "Bash(kdotool getactivewindow:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
