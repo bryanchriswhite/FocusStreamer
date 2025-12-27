@@ -92,6 +92,8 @@ func (s *Server) setupRoutes() {
 	// Stream control
 	api.HandleFunc("/stream/standby", s.handleGetStandby).Methods("GET")
 	api.HandleFunc("/stream/standby", s.handleToggleStandby).Methods("POST")
+	api.HandleFunc("/stream/allowlist-bypass", s.handleGetAllowlistBypass).Methods("GET")
+	api.HandleFunc("/stream/allowlist-bypass", s.handleToggleAllowlistBypass).Methods("POST")
 	api.HandleFunc("/stream/placeholder/next", s.handleNextPlaceholder).Methods("POST")
 	api.HandleFunc("/stream/placeholder/prev", s.handlePrevPlaceholder).Methods("POST")
 	api.HandleFunc("/stream/zoom", s.handleGetZoom).Methods("GET")
@@ -723,6 +725,23 @@ func (s *Server) handleGetStandby(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleToggleStandby(w http.ResponseWriter, r *http.Request) {
 	newState := s.windowMgr.ToggleForceStandby()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": newState,
+		"status":  "success",
+	})
+}
+
+func (s *Server) handleGetAllowlistBypass(w http.ResponseWriter, r *http.Request) {
+	enabled := s.windowMgr.GetAllowlistBypass()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": enabled,
+	})
+}
+
+func (s *Server) handleToggleAllowlistBypass(w http.ResponseWriter, r *http.Request) {
+	newState := s.windowMgr.ToggleAllowlistBypass()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"enabled": newState,

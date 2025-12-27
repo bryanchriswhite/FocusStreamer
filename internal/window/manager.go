@@ -67,6 +67,9 @@ type Manager struct {
 	// Manual standby control
 	forceStandby bool
 
+	// Allowlist bypass mode - when enabled, all windows are shown regardless of allowlist
+	allowlistBypass bool
+
 	// Zoom and pan control
 	zoomState ZoomState
 	zoomMu    sync.RWMutex
@@ -758,8 +761,13 @@ func (m *Manager) captureAndStream() {
 	var windowToCapture *config.WindowInfo
 	var usePlaceholder bool
 
-	// Check if current window is allowlisted
-	isAllowlisted := m.IsWindowAllowlisted(currentWin)
+	// Check allowlist bypass mode
+	m.streamMu.Lock()
+	bypassEnabled := m.allowlistBypass
+	m.streamMu.Unlock()
+
+	// Check if current window is allowlisted (or bypass is enabled)
+	isAllowlisted := bypassEnabled || m.IsWindowAllowlisted(currentWin)
 	if isAllowlisted {
 		// Current window is allowlisted - use it and save as last allowed
 		windowToCapture = currentWin
@@ -787,8 +795,8 @@ func (m *Manager) captureAndStream() {
 				lastAllowedOnCurrentDesktop := lastAllowed.Desktop == -1 || lastAllowed.Desktop == currentDesktop
 
 				// Different window - re-verify the last allowed window is still allowlisted
-				// and on the current desktop
-				if lastAllowedOnCurrentDesktop && m.IsWindowAllowlisted(lastAllowed) {
+				// and on the current desktop (or bypass is enabled)
+				if lastAllowedOnCurrentDesktop && (bypassEnabled || m.IsWindowAllowlisted(lastAllowed)) {
 					windowToCapture = lastAllowed
 				} else {
 					// Last allowed window no longer matches or not on current desktop - clear it
@@ -1100,6 +1108,32 @@ func (m *Manager) ToggleForceStandby() bool {
 // Called only on transition TO standby mode
 func (m *Manager) rotatePlaceholder() {
 	m.CyclePlaceholder(1)
+}
+
+// SetAllowlistBypass sets the allowlist bypass mode
+func (m *Manager) SetAllowlistBypass(enabled bool) {
+	m.streamMu.Lock()
+	m.allowlistBypass = enabled
+	m.streamMu.Unlock()
+	logger.WithComponent("stream").Info().Bool("enabled", enabled).Msg("Allowlist bypass mode changed")
+}
+
+// GetAllowlistBypass returns the current allowlist bypass state
+func (m *Manager) GetAllowlistBypass() bool {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	return m.allowlistBypass
+}
+
+// ToggleAllowlistBypass toggles the allowlist bypass mode and returns the new state
+func (m *Manager) ToggleAllowlistBypass() bool {
+	m.streamMu.Lock()
+	m.allowlistBypass = !m.allowlistBypass
+	newState := m.allowlistBypass
+	m.streamMu.Unlock()
+
+	logger.WithComponent("stream").Info().Bool("enabled", newState).Msg("Allowlist bypass mode toggled")
+	return newState
 }
 
 // CyclePlaceholder cycles the placeholder by the given direction (+1 for next, -1 for prev)

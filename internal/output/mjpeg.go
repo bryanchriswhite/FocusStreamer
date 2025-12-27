@@ -351,6 +351,9 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
             align-items: center;
             min-height: 100vh;
         }
+        body.bypass-active {
+            border: 4px solid #dc3545;
+        }
         .stream-container {
             position: relative;
             display: flex;
@@ -412,6 +415,22 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         }
         .fab.standby:hover {
             background: rgba(240, 100, 100, 0.95);
+        }
+        .fab-bypass {
+            top: 24px;
+            bottom: auto;
+            right: 24px;
+        }
+        .fab-bypass.active {
+            background: rgba(220, 53, 69, 0.9);
+        }
+        .fab-bypass.active:hover {
+            background: rgba(240, 73, 89, 0.95);
+        }
+        .fab-bypass-tooltip {
+            top: 90px;
+            bottom: auto;
+            right: 24px;
         }
         .fab-tooltip {
             position: fixed;
@@ -587,6 +606,8 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
     </div>
     <button class="fab" id="standbyBtn" onclick="toggleStandby()" title="Toggle Standby">⏸</button>
     <div class="fab-tooltip" id="tooltip">Toggle Standby</div>
+    <button class="fab fab-bypass" id="bypassBtn" onclick="toggleBypass()" title="Toggle Allowlist Bypass">🔓</button>
+    <div class="fab-tooltip fab-bypass-tooltip" id="bypassTooltip">Enable Bypass</div>
     <div class="nav-trigger"></div>
     <div class="nav-menu">
         <a href="/" class="nav-link">📺 Stream</a>
@@ -607,6 +628,9 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
         // Standby state
         let isStandby = false;
         let isTransitioning = false;
+
+        // Bypass state
+        let isBypass = false;
 
         // Zoom state
         let zoomState = { scale: 1.0, offsetX: 0.5, offsetY: 0.5 };
@@ -632,6 +656,14 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
             .then(data => {
                 isStandby = data.enabled;
                 updateButton();
+            })
+            .catch(console.error);
+
+        fetch('/api/stream/allowlist-bypass')
+            .then(r => r.json())
+            .then(data => {
+                isBypass = data.enabled;
+                updateBypassButton();
             })
             .catch(console.error);
 
@@ -865,6 +897,32 @@ func (m *MJPEGOutput) GetControlHandler() http.HandlerFunc {
                 btn.innerHTML = '⏸';
                 tooltip.textContent = 'Show Standby';
                 cycleButtons.classList.remove('visible');
+            }
+        }
+
+        function toggleBypass() {
+            fetch('/api/stream/allowlist-bypass', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    isBypass = data.enabled;
+                    updateBypassButton();
+                })
+                .catch(console.error);
+        }
+
+        function updateBypassButton() {
+            const btn = document.getElementById('bypassBtn');
+            const tooltip = document.getElementById('bypassTooltip');
+            if (isBypass) {
+                btn.classList.add('active');
+                btn.innerHTML = '🔒';
+                tooltip.textContent = 'Disable Bypass';
+                document.body.classList.add('bypass-active');
+            } else {
+                btn.classList.remove('active');
+                btn.innerHTML = '🔓';
+                tooltip.textContent = 'Enable Bypass';
+                document.body.classList.remove('bypass-active');
             }
         }
 
