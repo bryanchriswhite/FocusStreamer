@@ -15,10 +15,28 @@ import (
 type AllowlistSource string
 
 const (
-	AllowlistSourceNone     AllowlistSource = ""        // Not allowlisted
+	AllowlistSourceNone     AllowlistSource = ""         // Not allowlisted
 	AllowlistSourceExplicit AllowlistSource = "explicit" // Explicitly added to allowlist
 	AllowlistSourcePattern  AllowlistSource = "pattern"  // Matched by a pattern
+	AllowlistSourceURL      AllowlistSource = "url"      // Matched by URL rule
 )
+
+// UrlRuleType indicates the type of URL allowlist rule
+type UrlRuleType string
+
+const (
+	UrlRuleTypePage      UrlRuleType = "page"
+	UrlRuleTypeDomain    UrlRuleType = "domain"
+	UrlRuleTypeSubdomain UrlRuleType = "subdomain"
+)
+
+// UrlRule represents a URL allowlist rule
+type UrlRule struct {
+	ID          string      `json:"id" yaml:"id"`
+	Type        UrlRuleType `json:"type" yaml:"type"`
+	Pattern     string      `json:"pattern" yaml:"pattern"`
+	Description string      `json:"description,omitempty" yaml:"description,omitempty"`
+}
 
 // Application represents a running application
 type Application struct {
@@ -55,12 +73,15 @@ type Config struct {
 	AllowlistPatterns      []string      `json:"allowlist_patterns" yaml:"allowlist_patterns"`
 	AllowlistTitlePatterns []string      `json:"allowlist_title_patterns" yaml:"allowlist_title_patterns"`
 	AllowlistedApps        []string      `json:"allowed_apps" yaml:"allowed_apps"`
+	AllowlistURLRules      []UrlRule     `json:"allowlist_url_rules" yaml:"allowlist_url_rules"`
+	BrowserWindowClasses   []string      `json:"browser_window_classes" yaml:"browser_window_classes"`
+	BrowserBlockedClasses  []string      `json:"browser_blocked_classes" yaml:"browser_blocked_classes"`
 	VirtualDisplay         DisplayConfig `json:"virtual_display" yaml:"virtual_display"`
 	Overlay                OverlayConfig `json:"overlay" yaml:"overlay"`
 	ServerPort             int           `json:"server_port" yaml:"server_port"`
 	LogLevel               string        `json:"log_level" yaml:"log_level"`
-	PlaceholderImagePath   string        `json:"placeholder_image_path" yaml:"placeholder_image_path"`     // Deprecated: use PlaceholderImagePaths
-	PlaceholderImagePaths  []string      `json:"placeholder_image_paths" yaml:"placeholder_image_paths"`   // List of placeholder image paths
+	PlaceholderImagePath   string        `json:"placeholder_image_path" yaml:"placeholder_image_path"`   // Deprecated: use PlaceholderImagePaths
+	PlaceholderImagePaths  []string      `json:"placeholder_image_paths" yaml:"placeholder_image_paths"` // List of placeholder image paths
 }
 
 // OverlayConfig represents overlay configuration
@@ -143,6 +164,9 @@ func (m *Manager) getDefaults() *Config {
 		AllowlistPatterns:      []string{},
 		AllowlistTitlePatterns: []string{},
 		AllowlistedApps:        []string{},
+		AllowlistURLRules:      []UrlRule{},
+		BrowserWindowClasses:   []string{},
+		BrowserBlockedClasses:  []string{},
 		VirtualDisplay: DisplayConfig{
 			Width:     1920,
 			Height:    1080,
@@ -178,6 +202,15 @@ func (m *Manager) load() error {
 	}
 	if cfg.AllowlistTitlePatterns == nil {
 		cfg.AllowlistTitlePatterns = []string{}
+	}
+	if cfg.AllowlistURLRules == nil {
+		cfg.AllowlistURLRules = []UrlRule{}
+	}
+	if cfg.BrowserWindowClasses == nil {
+		cfg.BrowserWindowClasses = []string{}
+	}
+	if cfg.BrowserBlockedClasses == nil {
+		cfg.BrowserBlockedClasses = []string{}
 	}
 	if cfg.Overlay.Widgets == nil {
 		cfg.Overlay.Widgets = []map[string]interface{}{}
@@ -350,6 +383,118 @@ func (m *Manager) IsAllowlisted(appClass string) bool {
 
 	for _, app := range m.config.AllowlistedApps {
 		if app == normalized {
+			return true
+		}
+	}
+	return false
+}
+
+// AddURLRule adds a URL allowlist rule
+func (m *Manager) AddURLRule(rule UrlRule) error {
+	if rule.ID == "" {
+		return fmt.Errorf("url rule id is required")
+	}
+	if rule.Pattern == "" {
+		return fmt.Errorf("url rule pattern is required")
+	}
+
+	switch rule.Type {
+	case UrlRuleTypePage, UrlRuleTypeDomain, UrlRuleTypeSubdomain:
+		// Valid
+	default:
+		return fmt.Errorf("invalid url rule type: %s", rule.Type)
+	}
+
+	m.mu.Lock()
+	for _, existing := range m.config.AllowlistURLRules {
+		if existing.ID == rule.ID {
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	m.config.AllowlistURLRules = append(m.config.AllowlistURLRules, rule)
+	m.mu.Unlock()
+
+	return m.Save()
+}
+
+// RemoveURLRule removes a URL allowlist rule by ID
+func (m *Manager) RemoveURLRule(ruleID string) error {
+	m.mu.Lock()
+	filtered := make([]UrlRule, 0, len(m.config.AllowlistURLRules))
+	for _, rule := range m.config.AllowlistURLRules {
+		if rule.ID != ruleID {
+			filtered = append(filtered, rule)
+		}
+	}
+	m.config.AllowlistURLRules = filtered
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// AddBrowserWindowClass stores a browser window class for URL-based allowlisting
+func (m *Manager) AddBrowserWindowClass(windowClass string) error {
+	normalized := strings.ToLower(windowClass)
+	if normalized == "" {
+		return fmt.Errorf("window class is required")
+	}
+
+	m.mu.Lock()
+	for _, existing := range m.config.BrowserWindowClasses {
+		if existing == normalized {
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	m.config.BrowserWindowClasses = append(m.config.BrowserWindowClasses, normalized)
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// SetBrowserBlocked sets whether a browser window class is blocked
+func (m *Manager) SetBrowserBlocked(windowClass string, blocked bool) error {
+	normalized := strings.ToLower(windowClass)
+	if normalized == "" {
+		return fmt.Errorf("window class is required")
+	}
+
+	m.mu.Lock()
+	filtered := make([]string, 0, len(m.config.BrowserBlockedClasses))
+	for _, existing := range m.config.BrowserBlockedClasses {
+		if existing != normalized {
+			filtered = append(filtered, existing)
+		}
+	}
+	if blocked {
+		filtered = append(filtered, normalized)
+	}
+	m.config.BrowserBlockedClasses = filtered
+	m.mu.Unlock()
+	return m.Save()
+}
+
+// IsBrowserBlocked checks if a browser window class is blocked
+func (m *Manager) IsBrowserBlocked(windowClass string) bool {
+	normalized := strings.ToLower(windowClass)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, existing := range m.config.BrowserBlockedClasses {
+		if existing == normalized {
+			return true
+		}
+	}
+	return false
+}
+
+// IsBrowserWindowClass checks if a window class is recognized as a browser
+func (m *Manager) IsBrowserWindowClass(windowClass string) bool {
+	normalized := strings.ToLower(windowClass)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, existing := range m.config.BrowserWindowClasses {
+		if existing == normalized {
 			return true
 		}
 	}

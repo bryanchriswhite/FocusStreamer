@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/config"
 	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
@@ -63,14 +64,22 @@ func (s *Server) setupRoutes() {
 
 	// Window state
 	api.HandleFunc("/window/current", s.handleGetCurrentWindow).Methods("GET")
+	api.HandleFunc("/window/allowlist-status", s.handleGetAllowlistStatus).Methods("GET")
 	api.HandleFunc("/window/stream", s.handleWindowStream)
 	api.HandleFunc("/window/{id}/screenshot", s.handleGetWindowScreenshot).Methods("GET")
+
+	// Browser context
+	api.HandleFunc("/browser/active", s.handleBrowserActive).Methods("POST")
+	api.HandleFunc("/browser/allowlist", s.handleSetBrowserAllowlist).Methods("POST")
+	api.HandleFunc("/browser/status", s.handleBrowserStatus).Methods("GET")
 
 	// Configuration
 	api.HandleFunc("/config", s.handleGetConfig).Methods("GET")
 	api.HandleFunc("/config", s.handleUpdateConfig).Methods("PUT")
 	api.HandleFunc("/config/patterns", s.handleAddPattern).Methods("POST")
 	api.HandleFunc("/config/patterns", s.handleRemovePattern).Methods("DELETE")
+	api.HandleFunc("/config/url-rules", s.handleAddURLRule).Methods("POST")
+	api.HandleFunc("/config/url-rules/{id}", s.handleRemoveURLRule).Methods("DELETE")
 	api.HandleFunc("/config/placeholder-image", s.handleGetPlaceholder).Methods("GET")
 	api.HandleFunc("/config/placeholder-image", s.handleUploadPlaceholder).Methods("POST")
 	api.HandleFunc("/config/placeholder-image", s.handleDeletePlaceholder).Methods("DELETE")
@@ -106,9 +115,9 @@ func (s *Server) setupRoutes() {
 
 	// MJPEG stream endpoints (if MJPEG output is enabled)
 	if s.mjpegOut != nil {
-		s.router.HandleFunc("/", s.mjpegOut.GetViewerHandler())          // Clean HTML viewer (root)
-		s.router.HandleFunc("/control", s.mjpegOut.GetControlHandler())  // HTML viewer with controls
-		s.router.HandleFunc("/stream", s.mjpegOut.GetHTTPHandler())      // Raw MJPEG feed
+		s.router.HandleFunc("/", s.mjpegOut.GetViewerHandler())         // Clean HTML viewer (root)
+		s.router.HandleFunc("/control", s.mjpegOut.GetControlHandler()) // HTML viewer with controls
+		s.router.HandleFunc("/stream", s.mjpegOut.GetHTTPHandler())     // Raw MJPEG feed
 		s.router.HandleFunc("/stats", s.mjpegOut.GetStatsHandler())
 	}
 
@@ -159,8 +168,8 @@ func (s *Server) createSettingsHandler() http.Handler {
 
 // Start starts the HTTP server
 func (s *Server) Start(port int) error {
-	addr := fmt.Sprintf(":%d", port)
-	logger.WithComponent("overlay").Info().Msgf("Starting server on http://localhost%s\n", addr)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	logger.WithComponent("overlay").Info().Msgf("Starting server on http://%s\n", addr)
 	return http.ListenAndServe(addr, s.enableCORS(s.router))
 }
 
@@ -266,6 +275,21 @@ func (s *Server) handleGetCurrentWindow(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(currentWindow)
 }
 
+func (s *Server) handleGetAllowlistStatus(w http.ResponseWriter, r *http.Request) {
+	currentWindow := s.windowMgr.GetCurrentWindow()
+	if currentWindow == nil {
+		http.Error(w, "No window focused", http.StatusNotFound)
+		return
+	}
+
+	source := s.windowMgr.GetWindowAllowlistSource(currentWindow)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"allowlisted":      source != config.AllowlistSourceNone,
+		"allowlist_source": source,
+	})
+}
+
 func (s *Server) handleWindowStream(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -325,6 +349,102 @@ func (s *Server) handleGetWindowScreenshot(w http.ResponseWriter, r *http.Reques
 	w.Write(pngData)
 }
 
+func (s *Server) handleBrowserActive(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		WindowClass string `json:"window_class"`
+		URL         string `json:"url"`
+		Title       string `json:"title"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.WindowClass == "" || req.URL == "" {
+		http.Error(w, "window_class and url are required", http.StatusBadRequest)
+		return
+	}
+
+	s.windowMgr.UpdateBrowserContext(req.WindowClass, req.URL, req.Title)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleSetBrowserAllowlist(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		WindowClass string `json:"window_class"`
+		Allowed     bool   `json:"allowed"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.WindowClass == "" {
+		http.Error(w, "window_class is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.configMgr.AddBrowserWindowClass(req.WindowClass); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.configMgr.SetBrowserBlocked(req.WindowClass, !req.Allowed); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"allowed": req.Allowed,
+	})
+}
+
+func (s *Server) handleBrowserStatus(w http.ResponseWriter, r *http.Request) {
+	windowClass := r.URL.Query().Get("window_class")
+	if windowClass == "" {
+		current := s.windowMgr.GetCurrentWindow()
+		if current != nil {
+			windowClass = current.Class
+		}
+	}
+
+	if windowClass == "" {
+		http.Error(w, "window_class is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, ok, fresh := s.windowMgr.GetBrowserContextStatus(windowClass)
+	if !ok {
+		http.Error(w, "browser context not found", http.StatusNotFound)
+		return
+	}
+
+	ageSeconds := time.Since(ctx.UpdatedAt).Seconds()
+	ttlSeconds := s.windowMgr.GetBrowserContextTTL().Seconds()
+	remainingSeconds := ttlSeconds - ageSeconds
+	if remainingSeconds < 0 {
+		remainingSeconds = 0
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"window_class":          ctx.WindowClass,
+		"url":                   ctx.URL,
+		"title":                 ctx.Title,
+		"updated_at":            ctx.UpdatedAt,
+		"fresh":                 fresh,
+		"age_seconds":           ageSeconds,
+		"ttl_seconds":           ttlSeconds,
+		"ttl_remaining_seconds": remainingSeconds,
+	})
+}
+
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.configMgr.Get()
 	w.Header().Set("Content-Type", "application/json")
@@ -377,6 +497,62 @@ func (s *Server) handleRemovePattern(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.configMgr.RemovePattern(req.Pattern); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleAddURLRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID          string             `json:"id"`
+		Type        config.UrlRuleType `json:"type"`
+		Pattern     string             `json:"pattern"`
+		Description string             `json:"description"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ruleID := req.ID
+	if ruleID == "" {
+		generated, err := generateRuleID()
+		if err != nil {
+			http.Error(w, "failed to generate rule id", http.StatusInternalServerError)
+			return
+		}
+		ruleID = generated
+	}
+
+	rule := config.UrlRule{
+		ID:          ruleID,
+		Type:        req.Type,
+		Pattern:     req.Pattern,
+		Description: req.Description,
+	}
+
+	if err := s.configMgr.AddURLRule(rule); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rule)
+}
+
+func (s *Server) handleRemoveURLRule(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	ruleID := vars["id"]
+	if ruleID == "" {
+		http.Error(w, "rule id is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.configMgr.RemoveURLRule(ruleID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -800,7 +976,7 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "healthy",
+		"status":  "healthy",
 		"version": "0.1.0",
 	})
 }
@@ -1064,4 +1240,12 @@ func (s *Server) saveOverlayConfig() error {
 	cfg := s.configMgr.Get()
 	cfg.Overlay.Widgets = s.overlayMgr.ExportConfig()
 	return s.configMgr.Update(cfg)
+}
+
+func generateRuleID() (string, error) {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }

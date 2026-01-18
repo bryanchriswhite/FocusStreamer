@@ -9,6 +9,7 @@ import (
 	_ "image/gif"  // Register GIF decoder
 	_ "image/jpeg" // Register JPEG decoder
 	"image/png"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -34,6 +35,15 @@ type ZoomState struct {
 	Scale   float64 `json:"scale"`   // 1.0 = no zoom, 2.0 = 2x zoom, max 4.0
 	OffsetX float64 `json:"offsetX"` // Pan offset X as percentage (0.0 = left edge, 1.0 = right edge)
 	OffsetY float64 `json:"offsetY"` // Pan offset Y as percentage (0.0 = top edge, 1.0 = bottom edge)
+}
+
+// BrowserContext represents the current browser tab context
+// for a given window class.
+type BrowserContext struct {
+	WindowClass string    `json:"window_class"`
+	URL         string    `json:"url"`
+	Title       string    `json:"title"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Manager handles window detection and monitoring
@@ -69,6 +79,11 @@ type Manager struct {
 
 	// Allowlist bypass mode - when enabled, all windows are shown regardless of allowlist
 	allowlistBypass bool
+
+	// Browser URL contexts keyed by window class
+	browserContexts   map[string]BrowserContext
+	browserContextMu  sync.RWMutex
+	browserContextTTL time.Duration
 
 	// Zoom and pan control
 	zoomState ZoomState
@@ -138,16 +153,18 @@ func NewManager(configMgr *config.Manager) (*Manager, error) {
 	}
 
 	m := &Manager{
-		backend:          backend,
-		captureRouter:    captureRouter,
-		conn:             conn,
-		root:             root,
-		screen:           screen,
-		configMgr:        configMgr,
-		listeners:        make([]chan *config.WindowInfo, 0),
-		stopChan:         make(chan struct{}),
-		compositeEnabled: compositeEnabled,
-		zoomState:        ZoomState{Scale: 1.0, OffsetX: 0.5, OffsetY: 0.5},
+		backend:           backend,
+		captureRouter:     captureRouter,
+		conn:              conn,
+		root:              root,
+		screen:            screen,
+		configMgr:         configMgr,
+		listeners:         make([]chan *config.WindowInfo, 0),
+		stopChan:          make(chan struct{}),
+		compositeEnabled:  compositeEnabled,
+		browserContexts:   make(map[string]BrowserContext),
+		browserContextTTL: 5 * time.Second,
+		zoomState:         ZoomState{Scale: 1.0, OffsetX: 0.5, OffsetY: 0.5},
 	}
 
 	return m, nil
@@ -233,6 +250,14 @@ func (m *Manager) IsWindowAllowlisted(window *config.WindowInfo) bool {
 
 // GetWindowAllowlistSource returns why a window is allowlisted (explicit, pattern, or none)
 func (m *Manager) GetWindowAllowlistSource(window *config.WindowInfo) config.AllowlistSource {
+	if window == nil {
+		return config.AllowlistSourceNone
+	}
+
+	if m.isBrowserWindow(window.Class) {
+		return m.getBrowserAllowlistSource(window.Class)
+	}
+
 	cfg := m.configMgr.Get()
 
 	// Normalize class to lowercase for comparison
@@ -263,6 +288,151 @@ func (m *Manager) GetWindowAllowlistSource(window *config.WindowInfo) config.All
 	}
 
 	return config.AllowlistSourceNone
+}
+
+// UpdateBrowserContext updates the active browser URL context.
+func (m *Manager) UpdateBrowserContext(windowClass, urlValue, title string) {
+	normalized := strings.ToLower(windowClass)
+	if normalized == "" {
+		return
+	}
+
+	if err := m.configMgr.AddBrowserWindowClass(normalized); err != nil {
+		logger.WithComponent("window").Warn().Err(err).Msg("Failed to store browser window class")
+	}
+
+	ctx := BrowserContext{
+		WindowClass: normalized,
+		URL:         urlValue,
+		Title:       title,
+		UpdatedAt:   time.Now(),
+	}
+
+	m.browserContextMu.Lock()
+	m.browserContexts[normalized] = ctx
+	m.browserContextMu.Unlock()
+}
+
+// GetBrowserContext returns the current browser context for a window class.
+func (m *Manager) GetBrowserContext(windowClass string) (BrowserContext, bool) {
+	normalized := strings.ToLower(windowClass)
+	m.browserContextMu.RLock()
+	ctx, ok := m.browserContexts[normalized]
+	m.browserContextMu.RUnlock()
+	return ctx, ok
+}
+
+// GetBrowserContextStatus returns the current browser context and freshness.
+func (m *Manager) GetBrowserContextStatus(windowClass string) (BrowserContext, bool, bool) {
+	ctx, ok := m.GetBrowserContext(windowClass)
+	if !ok {
+		return BrowserContext{}, false, false
+	}
+	return ctx, true, m.isBrowserContextFresh(ctx)
+}
+
+func (m *Manager) GetBrowserContextTTL() time.Duration {
+	return m.browserContextTTL
+}
+
+func (m *Manager) isBrowserWindow(windowClass string) bool {
+	return m.configMgr.IsBrowserWindowClass(windowClass) || m.hasBrowserContext(windowClass)
+}
+
+func (m *Manager) hasBrowserContext(windowClass string) bool {
+	normalized := strings.ToLower(windowClass)
+	m.browserContextMu.RLock()
+	_, ok := m.browserContexts[normalized]
+	m.browserContextMu.RUnlock()
+	return ok
+}
+
+func (m *Manager) getBrowserAllowlistSource(windowClass string) config.AllowlistSource {
+	if m.configMgr.IsBrowserBlocked(windowClass) {
+		return config.AllowlistSourceNone
+	}
+
+	ctx, ok := m.GetBrowserContext(windowClass)
+	if !ok || !m.isBrowserContextFresh(ctx) {
+		return config.AllowlistSourceNone
+	}
+
+	if m.isURLAllowlisted(ctx.URL) {
+		return config.AllowlistSourceURL
+	}
+
+	return config.AllowlistSourceNone
+}
+
+func (m *Manager) isBrowserContextFresh(ctx BrowserContext) bool {
+	if ctx.UpdatedAt.IsZero() {
+		return false
+	}
+	return time.Since(ctx.UpdatedAt) <= m.browserContextTTL
+}
+
+func (m *Manager) isURLAllowlisted(urlValue string) bool {
+	cfg := m.configMgr.Get()
+	for _, rule := range cfg.AllowlistURLRules {
+		if matchURLRule(urlValue, rule) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchURLRule(urlValue string, rule config.UrlRule) bool {
+	normalizedPattern := strings.TrimSpace(strings.ToLower(rule.Pattern))
+	if normalizedPattern == "" {
+		return false
+	}
+
+	parsedURL, err := url.Parse(urlValue)
+	if err != nil || parsedURL.Host == "" {
+		return false
+	}
+
+	host := strings.ToLower(parsedURL.Hostname())
+	if host == "" {
+		return false
+	}
+
+	switch rule.Type {
+	case config.UrlRuleTypePage:
+		parsedURL.Fragment = ""
+		normalizedURL, err := normalizeURL(parsedURL.String())
+		if err != nil {
+			return false
+		}
+		patternURL, err := normalizeURL(rule.Pattern)
+		if err != nil {
+			return false
+		}
+		return normalizedURL == patternURL
+	case config.UrlRuleTypeDomain:
+		patternHost := strings.TrimPrefix(normalizedPattern, ".")
+		if host == patternHost {
+			return true
+		}
+		return strings.HasSuffix(host, "."+patternHost)
+	case config.UrlRuleTypeSubdomain:
+		patternHost := strings.TrimPrefix(normalizedPattern, ".")
+		return host == patternHost
+	default:
+		return false
+	}
+}
+
+func normalizeURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("url missing scheme or host")
+	}
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }
 
 // Subscribe adds a listener for window changes
@@ -1300,8 +1470,9 @@ func (m *Manager) applyZoom(img *image.RGBA) *image.RGBA {
 		int(cropY+viewportHeight),
 	)
 
-	// Create destination image at original size
-	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Create destination image at virtual display size (fills output canvas when zoomed)
+	cfg := m.configMgr.Get()
+	dst := image.NewRGBA(image.Rect(0, 0, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height))
 
 	// Scale the cropped region to fill the destination
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, cropRect, xdraw.Over, nil)

@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FocusStreamer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>FocusStreamer</h1>
+      <p class="subtitle">URL Allowlist</p>
+    </header>
+
+    <section class="card" id="statusCard">
+      <h2>Status</h2>
+      <div class="row">
+        <span class="label">Focused Window</span>
+        <span class="value" id="focusedWindow">Loading…</span>
+      </div>
+      <div class="row">
+        <span class="label">Allowlist</span>
+        <span class="value" id="allowlistStatus">Loading…</span>
+      </div>
+      <div class="row">
+        <span class="label">Browser Allowed</span>
+        <span class="value" id="browserAllowed">Unknown</span>
+      </div>
+      <div class="row">
+        <span class="label">Context</span>
+        <span class="value" id="browserContext">Unknown</span>
+      </div>
+      <div class="row">
+        <span class="label">Updated</span>
+        <span class="value" id="browserUpdated">Unknown</span>
+      </div>
+      <div class="row">
+        <span class="label">TTL Left</span>
+        <span class="value" id="browserTTL">Unknown</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Current Tab</h2>
+      <div class="row">
+        <span class="label">Title</span>
+        <span class="value" id="tabTitle">Loading…</span>
+      </div>
+      <div class="row">
+        <span class="label">URL</span>
+        <span class="value" id="tabUrl">Loading…</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Quick Actions</h2>
+      <div class="button-grid">
+        <button id="allowPage">Allow Page</button>
+        <button id="allowDomain">Allow Domain</button>
+        <button id="allowSubdomain">Allow Subdomain</button>
+        <button id="removeRule" class="secondary">Remove Matching Rule</button>
+      </div>
+      <div class="hint" id="ruleHint">No matching URL rule.</div>
+    </section>
+
+    <section class="card">
+      <h2>Browser Control</h2>
+      <div class="row">
+        <span class="label">Window Class</span>
+        <span class="value" id="browserClass">Unknown</span>
+      </div>
+      <button id="toggleBrowser" class="secondary">Toggle Browser Allow</button>
+    </section>
+
+    <section class="card">
+      <h2>Messages</h2>
+      <div id="message" class="message">Ready.</div>
+    </section>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

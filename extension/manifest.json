@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "FocusStreamer URL Allowlist",
+  "version": "0.1.0",
+  "description": "Control FocusStreamer allowlist rules for the active tab.",
+  "permissions": ["tabs", "activeTab", "storage", "offscreen"],
+  "host_permissions": ["http://127.0.0.1:8080/*"],
+  "action": {
+    "default_title": "FocusStreamer",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
