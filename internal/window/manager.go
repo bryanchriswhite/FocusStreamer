@@ -1472,10 +1472,34 @@ func (m *Manager) applyZoom(img *image.RGBA) *image.RGBA {
 
 	// Create destination image at virtual display size (fills output canvas when zoomed)
 	cfg := m.configMgr.Get()
-	dst := image.NewRGBA(image.Rect(0, 0, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height))
+	dstWidth := cfg.VirtualDisplay.Width
+	dstHeight := cfg.VirtualDisplay.Height
+	dst := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
 
-	// Scale the cropped region to fill the destination
-	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, cropRect, xdraw.Over, nil)
+	// Calculate scaling to maintain aspect ratio (letterbox if needed)
+	cropWidth := cropRect.Dx()
+	cropHeight := cropRect.Dy()
+	cropAspect := float64(cropWidth) / float64(cropHeight)
+	dstAspect := float64(dstWidth) / float64(dstHeight)
+
+	var scaledWidth, scaledHeight int
+	if cropAspect > dstAspect {
+		// Source is wider - fit to width, letterbox top/bottom
+		scaledWidth = dstWidth
+		scaledHeight = int(float64(dstWidth) / cropAspect)
+	} else {
+		// Source is taller - fit to height, letterbox left/right
+		scaledHeight = dstHeight
+		scaledWidth = int(float64(dstHeight) * cropAspect)
+	}
+
+	// Center the scaled image
+	offsetX := (dstWidth - scaledWidth) / 2
+	offsetY := (dstHeight - scaledHeight) / 2
+	scaledRect := image.Rect(offsetX, offsetY, offsetX+scaledWidth, offsetY+scaledHeight)
+
+	// Scale the cropped region to the centered rectangle (maintains aspect ratio)
+	xdraw.CatmullRom.Scale(dst, scaledRect, img, cropRect, xdraw.Over, nil)
 
 	return dst
 }
