@@ -94,15 +94,15 @@ type Config struct {
 	Profiles        []Profile `json:"profiles" yaml:"profiles"`
 
 	// Legacy fields - populated by Get() from active profile for backwards compat
-	// These are read during migration but not serialized to new config files
-	AllowlistPatterns      []string  `json:"-" yaml:"allowlist_patterns,omitempty"`
-	AllowlistTitlePatterns []string  `json:"-" yaml:"allowlist_title_patterns,omitempty"`
-	AllowlistedApps        []string  `json:"-" yaml:"allowed_apps,omitempty"`
-	AllowlistURLRules      []UrlRule `json:"-" yaml:"allowlist_url_rules,omitempty"`
-	BrowserWindowClasses   []string  `json:"-" yaml:"browser_window_classes,omitempty"`
-	BrowserBlockedClasses  []string  `json:"-" yaml:"browser_blocked_classes,omitempty"`
-	PlaceholderImagePath   string    `json:"-" yaml:"placeholder_image_path,omitempty"`
-	PlaceholderImagePaths  []string  `json:"-" yaml:"placeholder_image_paths,omitempty"`
+	// These are included in JSON API responses but not serialized to YAML config files
+	AllowlistPatterns      []string  `json:"allowlist_patterns,omitempty" yaml:"allowlist_patterns,omitempty"`
+	AllowlistTitlePatterns []string  `json:"allowlist_title_patterns,omitempty" yaml:"allowlist_title_patterns,omitempty"`
+	AllowlistedApps        []string  `json:"allowed_apps,omitempty" yaml:"allowed_apps,omitempty"`
+	AllowlistURLRules      []UrlRule `json:"allowlist_url_rules,omitempty" yaml:"allowlist_url_rules,omitempty"`
+	BrowserWindowClasses   []string  `json:"browser_window_classes,omitempty" yaml:"browser_window_classes,omitempty"`
+	BrowserBlockedClasses  []string  `json:"browser_blocked_classes,omitempty" yaml:"browser_blocked_classes,omitempty"`
+	PlaceholderImagePath   string    `json:"placeholder_image_path,omitempty" yaml:"placeholder_image_path,omitempty"`
+	PlaceholderImagePaths  []string  `json:"placeholder_image_paths,omitempty" yaml:"placeholder_image_paths,omitempty"`
 }
 
 // OverlayConfig represents overlay configuration
@@ -422,6 +422,18 @@ func (m *Manager) Save() error {
 		Str("active_profile", cfg.ActiveProfileID).
 		Msg("Saving config")
 
+	// Create a copy for saving to avoid modifying the original
+	// Clear legacy fields to prevent duplicating profile data at top level
+	saveConfig := *cfg
+	saveConfig.AllowlistPatterns = nil
+	saveConfig.AllowlistTitlePatterns = nil
+	saveConfig.AllowlistedApps = nil
+	saveConfig.AllowlistURLRules = nil
+	saveConfig.BrowserWindowClasses = nil
+	saveConfig.BrowserBlockedClasses = nil
+	saveConfig.PlaceholderImagePath = ""
+	saveConfig.PlaceholderImagePaths = nil
+
 	// Ensure the directory exists
 	configDir := filepath.Dir(m.configPath)
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -433,7 +445,7 @@ func (m *Manager) Save() error {
 	}
 
 	// Marshal to YAML
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(&saveConfig)
 	if err != nil {
 		logger.WithComponent("config").Error().
 			Err(err).
