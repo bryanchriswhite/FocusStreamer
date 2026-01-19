@@ -14,10 +14,10 @@
 }
 
 .pattern-error {
-  color: #d32f2f;
+  color: var(--accent-danger);
   font-size: 0.875rem;
   padding: 0.5rem;
-  background-color: #ffebee;
+  background-color: var(--bg-error);
   border-radius: 4px;
 }
 
@@ -32,16 +32,16 @@
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  background-color: #fafafa;
+  background-color: var(--bg-card-alt);
   gap: 0.75rem;
 }
 
 .pattern-item code {
   flex: 1;
   font-size: 0.95rem;
-  color: #1976d2;
+  color: var(--accent-primary);
   word-break: break-all;
 }
 
@@ -74,12 +74,12 @@
 }
 
 .pattern-actions button.secondary {
-  background-color: #e0e0e0;
-  color: #333;
+  background-color: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
 }
 
 .pattern-actions button.secondary:hover {
-  background-color: #d0d0d0;
+  background-color: var(--border-default);
 }
 
 .pattern-info {
@@ -94,7 +94,7 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.75rem;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .case-toggle {
@@ -110,7 +110,7 @@
 }
 
 .case-toggle.active {
-  color: #1976d2;
+  color: var(--accent-primary);
 }
 
 .add-options {
@@ -119,7 +119,7 @@
   gap: 0.5rem;
   margin-top: 0.5rem;
   font-size: 0.85rem;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .add-options label {
@@ -132,8 +132,8 @@
 .empty-patterns {
   text-align: center;
   padding: 2rem 1rem;
-  color: #999;
-  border: 2px dashed #e0e0e0;
+  color: var(--text-muted);
+  border: 2px dashed var(--border-default);
   border-radius: 6px;
 }
 
@@ -143,5 +143,5 @@
 
 .empty-patterns .hint {
   font-size: 0.875rem;
-  color: #bbb;
+  color: var(--text-muted);
 }

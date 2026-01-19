@@ -40,16 +40,16 @@
   top: calc(100% + 0.5rem);
   right: 0;
   min-width: 250px;
-  background: white;
+  background: var(--bg-card);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   z-index: 1000;
-  overflow: hidden;
 }
 
 .profile-list {
   max-height: 300px;
   overflow-y: auto;
+  border-radius: 8px 8px 0 0;
 }
 
 .profile-item {
@@ -59,15 +59,15 @@
   cursor: pointer;
   transition: background 0.15s ease;
   position: relative;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .profile-item:hover {
-  background: #f5f5f5;
+  background: var(--bg-card-alt);
 }
 
 .profile-item.active {
-  background: #e3f2fd;
+  background: var(--selection-bg);
 }
 
 .profile-item-name {
@@ -78,7 +78,7 @@
 }
 
 .profile-check {
-  color: #1976d2;
+  color: var(--accent-primary);
   font-weight: bold;
   margin-right: 0.5rem;
 }
@@ -89,23 +89,22 @@
   padding: 0.25rem 0.5rem;
   cursor: pointer;
   font-size: 1.2rem;
-  color: #666;
+  color: var(--text-secondary);
   border-radius: 4px;
 }
 
 .profile-menu-btn:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--bg-card-alt);
 }
 
 .profile-menu {
   position: absolute;
   right: 0.5rem;
   top: 100%;
-  background: white;
+  background: var(--bg-card);
   border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
   z-index: 1001;
-  overflow: hidden;
 }
 
 .profile-menu button {
@@ -117,26 +116,26 @@
   text-align: left;
   cursor: pointer;
   font-size: 0.9rem;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .profile-menu button:hover {
-  background: #f5f5f5;
+  background: var(--bg-card-alt);
 }
 
 .profile-menu button.danger {
-  color: #d32f2f;
+  color: var(--accent-danger);
 }
 
 .profile-menu button.danger:hover {
-  background: #ffebee;
+  background: var(--bg-error);
 }
 
 .profile-inline-form {
   position: absolute;
   right: 0.5rem;
   top: 100%;
-  background: white;
+  background: var(--bg-card);
   border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
   padding: 0.5rem;
@@ -149,9 +148,11 @@
 
 .profile-inline-form input {
   padding: 0.5rem;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-input);
   border-radius: 4px;
   font-size: 0.9rem;
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .profile-inline-form button {
@@ -163,36 +164,37 @@
 }
 
 .profile-inline-form button[type="submit"] {
-  background: #1976d2;
+  background: var(--accent-primary);
   color: white;
 }
 
 .profile-inline-form button[type="button"] {
-  background: #eee;
-  color: #333;
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
 }
 
 .profile-actions {
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--border-light);
   padding: 0.75rem;
+  border-radius: 0 0 8px 8px;
 }
 
 .profile-new-btn {
   width: 100%;
   padding: 0.75rem;
   background: transparent;
-  border: 2px dashed #ddd;
+  border: 2px dashed var(--border-input);
   border-radius: 6px;
   cursor: pointer;
-  color: #666;
+  color: var(--text-secondary);
   font-weight: 500;
   transition: all 0.15s ease;
 }
 
 .profile-new-btn:hover {
-  border-color: #1976d2;
-  color: #1976d2;
-  background: #f5f5f5;
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--bg-card-alt);
 }
 
 .profile-create-form {
@@ -203,9 +205,11 @@
 
 .profile-create-form input {
   padding: 0.5rem;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-input);
   border-radius: 4px;
   font-size: 0.9rem;
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .profile-create-buttons {
@@ -223,11 +227,11 @@
 }
 
 .profile-create-buttons button[type="submit"] {
-  background: #1976d2;
+  background: var(--accent-primary);
   color: white;
 }
 
 .profile-create-buttons button[type="button"] {
-  background: #eee;
-  color: #333;
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
 }

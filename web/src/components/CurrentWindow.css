@@ -3,7 +3,7 @@
 }
 
 .window-card {
-  border: 2px solid #e0e0e0;
+  border: 2px solid var(--border-default);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -21,7 +21,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background-color: #4caf50;
+  background-color: var(--accent-success);
   box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
   animation: pulse 2s infinite;
 }
@@ -42,14 +42,14 @@
 
 .window-details {
   padding: 1rem;
-  background: white;
+  background: var(--bg-card);
 }
 
 .detail-row {
   display: flex;
   justify-content: space-between;
   padding: 0.5rem 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .detail-row:last-child {
@@ -57,19 +57,19 @@
 }
 
 .detail-row .label {
-  color: #666;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
 .detail-row .value {
-  color: #333;
+  color: var(--text-primary);
   font-family: monospace;
 }
 
 .no-window {
   text-align: center;
   padding: 2rem;
-  color: #999;
-  border: 2px dashed #e0e0e0;
+  color: var(--text-muted);
+  border: 2px dashed var(--border-default);
   border-radius: 6px;
 }

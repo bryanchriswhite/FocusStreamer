@@ -7,6 +7,28 @@ import PatternManager from './components/PatternManager'
 import PlaceholderUpload from './components/PlaceholderUpload'
 import ProfileSelector from './components/ProfileSelector'
 
+function ThemeToggle({ theme, setTheme }) {
+  return (
+    <div className="theme-toggle">
+      <button
+        className={theme === 'light' ? 'active' : ''}
+        onClick={() => setTheme('light')}
+        title="Light"
+      >☀️</button>
+      <button
+        className={theme === 'dark' ? 'active' : ''}
+        onClick={() => setTheme('dark')}
+        title="Dark"
+      >🌙</button>
+      <button
+        className={theme === 'system' ? 'active' : ''}
+        onClick={() => setTheme('system')}
+        title="System"
+      >💻</button>
+    </div>
+  )
+}
+
 function App() {
   const [applications, setApplications] = useState([])
   const [currentWindow, setCurrentWindow] = useState(null)
@@ -17,6 +39,9 @@ function App() {
   const [placeholderImages, setPlaceholderImages] = useState([])
   const [profiles, setProfiles] = useState([])
   const [activeProfileId, setActiveProfileId] = useState('default')
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('theme') || 'system'
+  })
 
   // Fetch applications
   const fetchApplications = async () => {
@@ -218,6 +243,33 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Apply theme to document
+  useEffect(() => {
+    const root = document.documentElement
+
+    if (theme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+    } else {
+      root.setAttribute('data-theme', theme)
+    }
+
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  // Listen for system preference changes when in 'system' mode
+  useEffect(() => {
+    if (theme !== 'system') return
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = (e) => {
+      document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light')
+    }
+
+    mediaQuery.addEventListener('change', handler)
+    return () => mediaQuery.removeEventListener('change', handler)
+  }, [theme])
+
   // Toggle allowlist
   const toggleAllowlist = async (appClass, isAllowlisted) => {
     try {
@@ -324,6 +376,7 @@ function App() {
             onDuplicateProfile={duplicateProfile}
             onRenameProfile={renameProfile}
           />
+          <ThemeToggle theme={theme} setTheme={setTheme} />
           <nav className="header-nav">
             <a href="/" className="nav-link">Stream</a>
             <a href="/control" className="nav-link">Control</a>

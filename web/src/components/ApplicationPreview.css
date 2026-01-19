@@ -1,20 +1,20 @@
 .application-preview {
-  background: white;
+  background: var(--bg-card);
   border-radius: 8px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--border-default);
   padding: 1.5rem;
 }
 
 .preview-empty {
-  background: white;
+  background: var(--bg-card);
   border-radius: 8px;
-  border: 2px dashed #e0e0e0;
+  border: 2px dashed var(--border-default);
   padding: 3rem 1.5rem;
   text-align: center;
 }
 
 .preview-placeholder {
-  color: #999;
+  color: var(--text-muted);
 }
 
 .preview-placeholder p {
@@ -23,7 +23,7 @@
 
 .preview-placeholder .hint {
   font-size: 0.875rem;
-  color: #bbb;
+  color: var(--text-muted);
 }
 
 .preview-header {
@@ -32,12 +32,12 @@
   justify-content: space-between;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
-  border-bottom: 2px solid #f0f0f0;
+  border-bottom: 2px solid var(--border-light);
 }
 
 .preview-header h3 {
   margin: 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 1.25rem;
 }
 
@@ -49,15 +49,15 @@
 }
 
 .status-badge.allowlisted {
-  background-color: #e8f5e9;
-  color: #2e7d32;
-  border: 1px solid #4caf50;
+  background-color: var(--allowlisted-bg);
+  color: var(--accent-success);
+  border: 1px solid var(--accent-success);
 }
 
 .preview-screenshot {
   margin-bottom: 1.5rem;
   min-height: 200px;
-  background-color: #f5f5f5;
+  background-color: var(--bg-card-alt);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -77,11 +77,11 @@
 .screenshot-error {
   padding: 2rem;
   text-align: center;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .screenshot-error {
-  color: #d32f2f;
+  color: var(--accent-danger);
 }
 
 .screenshot-loading p,
@@ -96,7 +96,7 @@
 .detail-row {
   display: flex;
   padding: 0.75rem 0;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .detail-row:last-child {
@@ -106,31 +106,31 @@
 .detail-label {
   flex: 0 0 140px;
   font-weight: 500;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .detail-value {
   flex: 1;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .detail-value.monospace {
   font-family: 'Courier New', monospace;
-  background-color: #f5f5f5;
+  background-color: var(--bg-card-alt);
   padding: 0.125rem 0.5rem;
   border-radius: 4px;
 }
 
 .preview-note {
-  background-color: #e3f2fd;
-  border-left: 4px solid #2196f3;
+  background-color: var(--selection-bg);
+  border-left: 4px solid var(--accent-primary);
   padding: 1rem;
   border-radius: 4px;
 }
 
 .preview-note p {
   margin: 0 0 0.5rem 0;
-  color: #1565c0;
+  color: var(--accent-primary);
 }
 
 .preview-note p:last-child {
@@ -143,5 +143,5 @@
 
 .preview-note .hint {
   font-size: 0.875rem;
-  color: #1976d2;
+  color: var(--accent-primary);
 }

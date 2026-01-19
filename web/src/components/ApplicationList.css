@@ -9,25 +9,26 @@
   justify-content: space-between;
   align-items: center;
   padding: 1rem;
-  border: 2px solid #e0e0e0;
+  border: 2px solid var(--border-default);
   border-radius: 6px;
   transition: all 0.2s;
   cursor: pointer;
+  background-color: var(--bg-card);
 }
 
 .application-item:hover {
-  border-color: #bdbdbd;
+  border-color: var(--text-muted);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .application-item.allowlisted {
-  border-color: #4caf50;
-  background-color: #f1f8f4;
+  border-color: var(--accent-success);
+  background-color: var(--allowlisted-bg);
 }
 
 .application-item.selected {
-  border-color: #2196f3;
-  background-color: #e3f2fd;
+  border-color: var(--accent-primary);
+  background-color: var(--selection-bg);
   box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
 }
 
@@ -44,14 +45,14 @@
 
 .app-name {
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   font-size: 1rem;
 }
 
 .badge {
   display: inline-block;
   padding: 0.125rem 0.5rem;
-  background-color: #4caf50;
+  background-color: var(--accent-success);
   color: white;
   border-radius: 12px;
   font-size: 0.75rem;
@@ -67,12 +68,12 @@
 .app-class,
 .app-pid {
   font-size: 0.875rem;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .app-class strong,
 .app-pid strong {
-  color: #444;
+  color: var(--text-primary);
   font-weight: 500;
 }
 
@@ -83,7 +84,7 @@
 .empty-state {
   text-align: center;
   padding: 3rem 1rem;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .empty-state p {
@@ -92,16 +93,16 @@
 
 .empty-state .hint {
   font-size: 0.875rem;
-  color: #bbb;
+  color: var(--text-muted);
 }
 
 .badge.badge-pattern {
-  background-color: #9c27b0;
+  background-color: var(--accent-purple);
 }
 
 .pattern-hint {
   font-size: 0.75rem;
-  color: #9c27b0;
+  color: var(--accent-purple);
   font-style: italic;
   padding: 0.25rem 0.5rem;
   cursor: help;
