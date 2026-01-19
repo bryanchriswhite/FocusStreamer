@@ -42,6 +42,16 @@ function App() {
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('theme') || 'system'
   })
+  const [isScrolled, setIsScrolled] = useState(false)
+
+  // Track scroll position for header shadow
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 0)
+    }
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
 
   // Fetch applications
   const fetchApplications = async () => {
@@ -361,7 +371,7 @@ function App() {
 
   return (
     <div className="app">
-      <header className="header">
+      <header className={`header${isScrolled ? ' scrolled' : ''}`}>
         <div className="header-main">
           <h1>FocusStreamer</h1>
           <p className="subtitle">Virtual Display for Discord Screen Sharing</p>
