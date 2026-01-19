@@ -7,10 +7,19 @@ import (
 	"image/jpeg"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bryanchriswhite/FocusStreamer/internal/logger"
 )
+
+// clientStats tracks per-client connection statistics
+type clientStats struct {
+	frameChan     chan []byte
+	droppedFrames uint64
+	lastSent      time.Time
+	connected     time.Time
+}
 
 // MJPEGOutput streams frames as Motion JPEG over HTTP
 // This allows users to open the stream in a browser tab and share that tab in Discord
@@ -24,20 +33,21 @@ type MJPEGOutput struct {
 	currentFrame *image.RGBA
 	lastUpdate   time.Time
 
-	// Connected clients
+	// Connected clients with per-client stats
 	clientsMu sync.RWMutex
-	clients   map[chan []byte]struct{}
+	clients   map[chan []byte]*clientStats
 
 	// Stats
-	frameCount uint64
-	startTime  time.Time
+	frameCount    uint64
+	droppedFrames uint64 // Total frames dropped across all clients
+	startTime     time.Time
 }
 
 // NewMJPEGOutput creates a new MJPEG stream output
 func NewMJPEGOutput(config Config) *MJPEGOutput {
 	return &MJPEGOutput{
 		config:  config,
-		clients: make(map[chan []byte]struct{}),
+		clients: make(map[chan []byte]*clientStats),
 	}
 }
 
@@ -75,10 +85,11 @@ func (m *MJPEGOutput) Stop() error {
 	for ch := range m.clients {
 		close(ch)
 	}
-	m.clients = make(map[chan []byte]struct{})
+	m.clients = make(map[chan []byte]*clientStats)
 	m.clientsMu.Unlock()
 
-	logger.WithComponent("overlay").Info().Msgf("[MJPEG] Output stopped after %v frames", m.frameCount)
+	totalDropped := atomic.LoadUint64(&m.droppedFrames)
+	logger.WithComponent("overlay").Info().Msgf("[MJPEG] Output stopped after %v frames (%v dropped)", m.frameCount, totalDropped)
 	return nil
 }
 
@@ -104,14 +115,26 @@ func (m *MJPEGOutput) WriteFrame(frame *image.RGBA) error {
 
 	m.frameCount++
 
-	// Broadcast to all clients
+	// Broadcast to all clients with drop tracking
 	m.clientsMu.RLock()
-	for ch := range m.clients {
+	now := time.Now()
+	for ch, stats := range m.clients {
 		select {
 		case ch <- jpegData:
 			// Sent successfully
+			stats.lastSent = now
 		default:
 			// Client is slow, skip this frame
+			stats.droppedFrames++
+			atomic.AddUint64(&m.droppedFrames, 1)
+
+			// Log warning at thresholds
+			if stats.droppedFrames == 10 || stats.droppedFrames == 100 || stats.droppedFrames%1000 == 0 {
+				logger.WithComponent("mjpeg").Warn().
+					Uint64("dropped", stats.droppedFrames).
+					Dur("connected_for", now.Sub(stats.connected)).
+					Msg("Client dropping frames - possible network congestion")
+			}
 		}
 	}
 	m.clientsMu.RUnlock()
@@ -142,24 +165,42 @@ func (m *MJPEGOutput) GetHTTPHandler() http.HandlerFunc {
 		w.Header().Set("Expires", "0")
 		w.Header().Set("Connection", "close")
 
-		// Create channel for this client
-		frameChan := make(chan []byte, 2) // Buffer 2 frames
+		// Create channel for this client with larger buffer to handle network latency
+		frameChan := make(chan []byte, 10) // Buffer 10 frames to prevent drops during brief network delays
+
+		// Create client stats
+		now := time.Now()
+		stats := &clientStats{
+			frameChan: frameChan,
+			connected: now,
+			lastSent:  now,
+		}
 
 		// Register client
 		m.clientsMu.Lock()
-		m.clients[frameChan] = struct{}{}
+		m.clients[frameChan] = stats
 		clientCount := len(m.clients)
 		m.clientsMu.Unlock()
 
-		logger.WithComponent("overlay").Info().Msgf("[MJPEG] New client connected (total: %d)", clientCount)
+		logger.WithComponent("mjpeg").Info().Msgf("[MJPEG] New client connected (total: %d)", clientCount)
 
 		// Cleanup on disconnect
 		defer func() {
 			m.clientsMu.Lock()
+			clientStats := m.clients[frameChan]
 			delete(m.clients, frameChan)
 			clientCount := len(m.clients)
 			m.clientsMu.Unlock()
-			logger.WithComponent("overlay").Info().Msgf("[MJPEG] Client disconnected (remaining: %d)", clientCount)
+
+			if clientStats != nil && clientStats.droppedFrames > 0 {
+				logger.WithComponent("mjpeg").Info().
+					Uint64("dropped_frames", clientStats.droppedFrames).
+					Dur("session_duration", time.Since(clientStats.connected)).
+					Int("remaining_clients", clientCount).
+					Msg("[MJPEG] Client disconnected with frame drops")
+			} else {
+				logger.WithComponent("mjpeg").Info().Msgf("[MJPEG] Client disconnected (remaining: %d)", clientCount)
+			}
 		}()
 
 		// Stream frames to client
@@ -982,15 +1023,32 @@ func (m *MJPEGOutput) GetStatsHandler() http.HandlerFunc {
 		lastUpdate := m.lastUpdate
 		m.frameMu.RUnlock()
 
+		// Collect client stats
 		m.clientsMu.RLock()
 		clientCount := len(m.clients)
+		var totalClientDrops uint64
+		clientDetails := make([]string, 0, clientCount)
+		for _, stats := range m.clients {
+			totalClientDrops += stats.droppedFrames
+			clientDetails = append(clientDetails, fmt.Sprintf(
+				"connected %s ago, dropped %d frames",
+				time.Since(stats.connected).Round(time.Second),
+				stats.droppedFrames,
+			))
+		}
 		m.clientsMu.RUnlock()
 
+		totalDropped := atomic.LoadUint64(&m.droppedFrames)
+
 		var fps float64
+		var dropRate float64
 		if running && !startTime.IsZero() {
 			elapsed := time.Since(startTime).Seconds()
 			if elapsed > 0 {
 				fps = float64(frameCount) / elapsed
+			}
+			if frameCount > 0 {
+				dropRate = float64(totalDropped) / float64(frameCount) * 100
 			}
 		}
 
@@ -1004,8 +1062,11 @@ func (m *MJPEGOutput) GetStatsHandler() http.HandlerFunc {
         .stat { margin: 10px 0; }
         .label { color: #569cd6; }
         .value { color: #4ec9b0; }
+        .warning { color: #dcdcaa; }
+        .error { color: #f14c4c; }
         .status-running { color: #4ec9b0; }
         .status-stopped { color: #ce9178; }
+        .client-list { margin-left: 20px; font-size: 0.9em; color: #888; }
     </style>
 </head>
 <body>
@@ -1027,8 +1088,13 @@ func (m *MJPEGOutput) GetStatsHandler() http.HandlerFunc {
         <span class="value">%d</span>
     </div>
     <div class="stat">
+        <span class="label">Dropped Frames:</span>
+        <span class="value %s">%d (%.2f%%)</span>
+    </div>
+    <div class="stat">
         <span class="label">Connected Clients:</span>
         <span class="value">%d</span>
+        %s
     </div>
     <div class="stat">
         <span class="label">Last Update:</span>
@@ -1056,7 +1122,28 @@ func (m *MJPEGOutput) GetStatsHandler() http.HandlerFunc {
 			m.config.Width, m.config.Height, m.config.FPS,
 			fps,
 			frameCount,
+			func() string {
+				if dropRate > 5 {
+					return "error"
+				} else if dropRate > 1 {
+					return "warning"
+				}
+				return ""
+			}(),
+			totalDropped,
+			dropRate,
 			clientCount,
+			func() string {
+				if len(clientDetails) == 0 {
+					return ""
+				}
+				html := "<div class=\"client-list\">"
+				for i, detail := range clientDetails {
+					html += fmt.Sprintf("<div>Client %d: %s</div>", i+1, detail)
+				}
+				html += "</div>"
+				return html
+			}(),
 			func() string {
 				if lastUpdate.IsZero() {
 					return "Never"
@@ -1071,4 +1158,23 @@ func (m *MJPEGOutput) GetStatsHandler() http.HandlerFunc {
 			}(),
 		)
 	}
+}
+
+// GetDroppedFrames returns the total number of dropped frames
+func (m *MJPEGOutput) GetDroppedFrames() uint64 {
+	return atomic.LoadUint64(&m.droppedFrames)
+}
+
+// GetFrameCount returns the total number of frames sent
+func (m *MJPEGOutput) GetFrameCount() uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.frameCount
+}
+
+// GetClientCount returns the number of connected clients
+func (m *MJPEGOutput) GetClientCount() int {
+	m.clientsMu.RLock()
+	defer m.clientsMu.RUnlock()
+	return len(m.clients)
 }

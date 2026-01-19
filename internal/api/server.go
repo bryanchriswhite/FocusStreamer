@@ -1000,10 +1000,42 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Get stream health status from window manager
+	streamHealth := s.windowMgr.GetHealthStatus()
+
+	// Get MJPEG output stats
+	var mjpegStats map[string]interface{}
+	if s.mjpegOut != nil {
+		mjpegStats = map[string]interface{}{
+			"running":        s.mjpegOut.IsRunning(),
+			"client_count":   s.mjpegOut.GetClientCount(),
+			"frame_count":    s.mjpegOut.GetFrameCount(),
+			"dropped_frames": s.mjpegOut.GetDroppedFrames(),
+		}
+	}
+
+	// Determine overall health
+	overallHealthy := streamHealth.IsHealthy
+	if s.mjpegOut != nil && !s.mjpegOut.IsRunning() {
+		overallHealthy = false
+	}
+
+	status := "healthy"
+	if !overallHealthy {
+		status = "degraded"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "healthy",
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  status,
 		"version": "0.1.0",
+		"stream": map[string]interface{}{
+			"running":              streamHealth.StreamRunning,
+			"healthy":              streamHealth.IsHealthy,
+			"last_frame_age":       streamHealth.FrameAge,
+			"consecutive_failures": streamHealth.ConsecutiveFailures,
+		},
+		"mjpeg": mjpegStats,
 	})
 }
 
