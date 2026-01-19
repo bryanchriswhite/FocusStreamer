@@ -77,6 +77,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Str("log_level", cfg.LogLevel).
 		Msg("Configuration loaded")
 
+	// Clean up any broken placeholder image paths on startup
+	if removed, err := configMgr.CleanupBrokenPlaceholderPaths(); err != nil {
+		logger.WithComponent("config").Warn().Err(err).Msg("Failed to clean up broken placeholder paths")
+	} else if removed > 0 {
+		logger.WithComponent("config").Info().Int("count", removed).Msg("Cleaned up broken placeholder image paths")
+	}
+
 	// Initialize window manager
 	logger.WithComponent("init").Info().Msg("Connecting to X11 server")
 	windowMgr, err := window.NewManager(configMgr)

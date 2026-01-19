@@ -850,6 +850,65 @@ func (m *Manager) GetPlaceholderImagePaths() []string {
 	return paths
 }
 
+// IsPlaceholderImageUsedByOtherProfiles checks if the given image path is used by any profile
+// other than the active profile
+func (m *Manager) IsPlaceholderImageUsedByOtherProfiles(path string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	activeID := m.config.ActiveProfileID
+	for i := range m.config.Profiles {
+		if m.config.Profiles[i].ID == activeID {
+			continue // Skip active profile
+		}
+		for _, p := range m.config.Profiles[i].PlaceholderImagePaths {
+			if p == path {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CleanupBrokenPlaceholderPaths removes placeholder image paths that point to non-existent files
+// from all profiles. Returns the number of paths removed.
+func (m *Manager) CleanupBrokenPlaceholderPaths() (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	log := logger.WithComponent("config")
+	totalRemoved := 0
+
+	for i := range m.config.Profiles {
+		profile := &m.config.Profiles[i]
+		validPaths := make([]string, 0, len(profile.PlaceholderImagePaths))
+
+		for _, path := range profile.PlaceholderImagePaths {
+			if _, err := os.Stat(path); err == nil {
+				validPaths = append(validPaths, path)
+			} else {
+				log.Info().
+					Str("profile", profile.Name).
+					Str("path", path).
+					Msg("Removing broken placeholder image path")
+				totalRemoved++
+			}
+		}
+
+		profile.PlaceholderImagePaths = validPaths
+	}
+
+	if totalRemoved > 0 {
+		// Save without holding lock
+		m.mu.Unlock()
+		err := m.Save()
+		m.mu.Lock()
+		return totalRemoved, err
+	}
+
+	return 0, nil
+}
+
 // ClearAllPlaceholderImages removes all placeholder image paths from the active profile
 func (m *Manager) ClearAllPlaceholderImages() error {
 	m.mu.Lock()

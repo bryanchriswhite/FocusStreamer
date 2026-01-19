@@ -890,21 +890,28 @@ func (s *Server) handleDeletePlaceholderByID(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Remove file
-	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
-		log.Error().Err(err).Str("path", targetPath).Msg("Failed to delete placeholder file")
-		http.Error(w, "Failed to delete image: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// Check if other profiles use this image before deciding to delete from disk
+	usedByOthers := s.configMgr.IsPlaceholderImageUsedByOtherProfiles(targetPath)
 
-	// Remove from config
+	// Remove from active profile config first
 	if err := s.configMgr.RemovePlaceholderImage(targetPath); err != nil {
 		log.Error().Err(err).Msg("Failed to update config")
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Info().Str("id", id).Msg("Placeholder image deleted")
+	// Only delete the file if no other profile uses it
+	if !usedByOthers {
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			log.Error().Err(err).Str("path", targetPath).Msg("Failed to delete placeholder file")
+			// Config was already updated, so just warn but don't fail
+			log.Warn().Str("path", targetPath).Msg("Image disassociated from profile but file deletion failed")
+		} else {
+			log.Info().Str("id", id).Msg("Placeholder image deleted from disk")
+		}
+	} else {
+		log.Info().Str("id", id).Msg("Placeholder image disassociated from profile (still used by other profiles)")
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
