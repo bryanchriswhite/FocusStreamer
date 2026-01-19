@@ -1,0 +1,233 @@
+.profile-selector {
+  position: relative;
+}
+
+.profile-selector-current {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.profile-selector-current:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.profile-icon {
+  font-size: 1rem;
+}
+
+.profile-name {
+  font-weight: 500;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-dropdown-arrow {
+  font-size: 0.7rem;
+  margin-left: 0.25rem;
+}
+
+.profile-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  min-width: 250px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.profile-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.profile-item {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  position: relative;
+  color: #333;
+}
+
+.profile-item:hover {
+  background: #f5f5f5;
+}
+
+.profile-item.active {
+  background: #e3f2fd;
+}
+
+.profile-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-check {
+  color: #1976d2;
+  font-weight: bold;
+  margin-right: 0.5rem;
+}
+
+.profile-menu-btn {
+  background: transparent;
+  border: none;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  font-size: 1.2rem;
+  color: #666;
+  border-radius: 4px;
+}
+
+.profile-menu-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.profile-menu {
+  position: absolute;
+  right: 0.5rem;
+  top: 100%;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  z-index: 1001;
+  overflow: hidden;
+}
+
+.profile-menu button {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.profile-menu button:hover {
+  background: #f5f5f5;
+}
+
+.profile-menu button.danger {
+  color: #d32f2f;
+}
+
+.profile-menu button.danger:hover {
+  background: #ffebee;
+}
+
+.profile-inline-form {
+  position: absolute;
+  right: 0.5rem;
+  top: 100%;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  padding: 0.5rem;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 200px;
+}
+
+.profile-inline-form input {
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.profile-inline-form button {
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.profile-inline-form button[type="submit"] {
+  background: #1976d2;
+  color: white;
+}
+
+.profile-inline-form button[type="button"] {
+  background: #eee;
+  color: #333;
+}
+
+.profile-actions {
+  border-top: 1px solid #eee;
+  padding: 0.75rem;
+}
+
+.profile-new-btn {
+  width: 100%;
+  padding: 0.75rem;
+  background: transparent;
+  border: 2px dashed #ddd;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #666;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.profile-new-btn:hover {
+  border-color: #1976d2;
+  color: #1976d2;
+  background: #f5f5f5;
+}
+
+.profile-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.profile-create-form input {
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.profile-create-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.profile-create-buttons button {
+  flex: 1;
+  padding: 0.5rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.profile-create-buttons button[type="submit"] {
+  background: #1976d2;
+  color: white;
+}
+
+.profile-create-buttons button[type="button"] {
+  background: #eee;
+  color: #333;
+}

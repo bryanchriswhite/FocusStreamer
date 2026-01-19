@@ -137,6 +137,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger.WithComponent("serve").Info().Msg("Initializing HTTP server...")
 	server := api.NewServer(windowMgr, configMgr, nil, mjpegOut, overlayMgr)
 
+	// Set up profile change callback to notify window manager
+	server.SetOnProfileChange(func(profileID string) {
+		windowMgr.OnProfileChanged(profileID)
+	})
+
 	// Start server in a goroutine
 	go func() {
 		logger.WithComponent("serve").Info().Msgf("Server starting on http://localhost:%d", cfg.ServerPort)

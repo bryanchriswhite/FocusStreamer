@@ -1516,3 +1516,23 @@ func (m *Manager) scaleAndLetterbox(src *image.RGBA, out output.Output) *image.R
 
 	return dst
 }
+
+// OnProfileChanged should be called when the active profile changes.
+// It invalidates cached state that depends on profile settings.
+func (m *Manager) OnProfileChanged(profileID string) {
+	logger.WithComponent("window-manager").Info().
+		Str("profile_id", profileID).
+		Msg("Profile changed, invalidating caches")
+
+	// Clear cached placeholder image
+	m.streamMu.Lock()
+	m.cachedPlaceholder = nil
+	m.cachedPlaceholderPath = ""
+	m.currentPlaceholderIdx = 0
+	m.streamMu.Unlock()
+
+	// Clear the last allowed window since allowlist may have changed
+	m.streamMu.Lock()
+	m.lastAllowedWindow = nil
+	m.streamMu.Unlock()
+}

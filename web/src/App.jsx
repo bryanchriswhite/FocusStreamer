@@ -5,6 +5,7 @@ import ApplicationPreview from './components/ApplicationPreview'
 import CurrentWindow from './components/CurrentWindow'
 import PatternManager from './components/PatternManager'
 import PlaceholderUpload from './components/PlaceholderUpload'
+import ProfileSelector from './components/ProfileSelector'
 
 function App() {
   const [applications, setApplications] = useState([])
@@ -14,6 +15,8 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [placeholderImages, setPlaceholderImages] = useState([])
+  const [profiles, setProfiles] = useState([])
+  const [activeProfileId, setActiveProfileId] = useState('default')
 
   // Fetch applications
   const fetchApplications = async () => {
@@ -76,11 +79,127 @@ function App() {
     }
   }
 
+  // Fetch profiles
+  const fetchProfiles = async () => {
+    try {
+      const response = await fetch('/api/profiles')
+      if (response.ok) {
+        const data = await response.json()
+        setProfiles(data.profiles || [])
+        setActiveProfileId(data.active_profile_id || 'default')
+      }
+    } catch (err) {
+      console.error('Failed to fetch profiles:', err)
+    }
+  }
+
+  // Switch profile
+  const switchProfile = async (profileId) => {
+    try {
+      const response = await fetch('/api/profiles/active', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: profileId })
+      })
+      if (response.ok) {
+        setActiveProfileId(profileId)
+        // Refresh all data for the new profile
+        await Promise.all([
+          fetchApplications(),
+          fetchConfig(),
+          fetchPlaceholderImages()
+        ])
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  // Create profile
+  const createProfile = async (name) => {
+    try {
+      const response = await fetch('/api/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      })
+      if (response.ok) {
+        await fetchProfiles()
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  // Delete profile
+  const deleteProfile = async (profileId) => {
+    try {
+      const response = await fetch(`/api/profiles/${encodeURIComponent(profileId)}`, {
+        method: 'DELETE'
+      })
+      if (response.ok) {
+        await fetchProfiles()
+        // If we deleted the active profile, refresh everything
+        if (profileId === activeProfileId) {
+          await Promise.all([
+            fetchApplications(),
+            fetchConfig(),
+            fetchPlaceholderImages()
+          ])
+        }
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  // Duplicate profile
+  const duplicateProfile = async (profileId, newName) => {
+    try {
+      const response = await fetch(`/api/profiles/${encodeURIComponent(profileId)}/duplicate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+      })
+      if (response.ok) {
+        await fetchProfiles()
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  // Rename profile
+  const renameProfile = async (profileId, newName) => {
+    try {
+      // First get the current profile data
+      const getResponse = await fetch(`/api/profiles/${encodeURIComponent(profileId)}`)
+      if (!getResponse.ok) {
+        throw new Error('Failed to get profile')
+      }
+      const profile = await getResponse.json()
+
+      // Update with new name
+      profile.name = newName
+      const response = await fetch(`/api/profiles/${encodeURIComponent(profileId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile)
+      })
+      if (response.ok) {
+        await fetchProfiles()
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   // Initial load
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
       await Promise.all([
+        fetchProfiles(),
         fetchApplications(),
         fetchConfig(),
         fetchCurrentWindow(),
@@ -192,13 +311,24 @@ function App() {
     <div className="app">
       <header className="header">
         <div className="header-main">
-          <h1>🎯 FocusStreamer</h1>
+          <h1>FocusStreamer</h1>
           <p className="subtitle">Virtual Display for Discord Screen Sharing</p>
         </div>
-        <nav className="header-nav">
-          <a href="/" className="nav-link">📺 Stream</a>
-          <a href="/control" className="nav-link">🎛 Control</a>
-        </nav>
+        <div className="header-right">
+          <ProfileSelector
+            profiles={profiles}
+            activeProfileId={activeProfileId}
+            onSwitchProfile={switchProfile}
+            onCreateProfile={createProfile}
+            onDeleteProfile={deleteProfile}
+            onDuplicateProfile={duplicateProfile}
+            onRenameProfile={renameProfile}
+          />
+          <nav className="header-nav">
+            <a href="/" className="nav-link">Stream</a>
+            <a href="/control" className="nav-link">Control</a>
+          </nav>
+        </div>
       </header>
 
       {error && (

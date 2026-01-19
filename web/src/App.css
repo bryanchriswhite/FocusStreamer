@@ -31,6 +31,12 @@
   font-weight: 400;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .header-nav {
   display: flex;
   gap: 0.75rem;

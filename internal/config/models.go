@@ -38,6 +38,19 @@ type UrlRule struct {
 	Description string      `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
+// Profile represents a named configuration profile with its own allowlists and placeholders
+type Profile struct {
+	ID                     string    `json:"id" yaml:"id"`
+	Name                   string    `json:"name" yaml:"name"`
+	AllowlistPatterns      []string  `json:"allowlist_patterns" yaml:"allowlist_patterns"`
+	AllowlistTitlePatterns []string  `json:"allowlist_title_patterns" yaml:"allowlist_title_patterns"`
+	AllowlistedApps        []string  `json:"allowed_apps" yaml:"allowed_apps"`
+	AllowlistURLRules      []UrlRule `json:"allowlist_url_rules" yaml:"allowlist_url_rules"`
+	BrowserWindowClasses   []string  `json:"browser_window_classes" yaml:"browser_window_classes"`
+	BrowserBlockedClasses  []string  `json:"browser_blocked_classes" yaml:"browser_blocked_classes"`
+	PlaceholderImagePaths  []string  `json:"placeholder_image_paths" yaml:"placeholder_image_paths"`
+}
+
 // Application represents a running application
 type Application struct {
 	ID              string          `json:"id" mapstructure:"id"`
@@ -70,18 +83,26 @@ type Geometry struct {
 
 // Config represents the application configuration
 type Config struct {
-	AllowlistPatterns      []string      `json:"allowlist_patterns" yaml:"allowlist_patterns"`
-	AllowlistTitlePatterns []string      `json:"allowlist_title_patterns" yaml:"allowlist_title_patterns"`
-	AllowlistedApps        []string      `json:"allowed_apps" yaml:"allowed_apps"`
-	AllowlistURLRules      []UrlRule     `json:"allowlist_url_rules" yaml:"allowlist_url_rules"`
-	BrowserWindowClasses   []string      `json:"browser_window_classes" yaml:"browser_window_classes"`
-	BrowserBlockedClasses  []string      `json:"browser_blocked_classes" yaml:"browser_blocked_classes"`
-	VirtualDisplay         DisplayConfig `json:"virtual_display" yaml:"virtual_display"`
-	Overlay                OverlayConfig `json:"overlay" yaml:"overlay"`
-	ServerPort             int           `json:"server_port" yaml:"server_port"`
-	LogLevel               string        `json:"log_level" yaml:"log_level"`
-	PlaceholderImagePath   string        `json:"placeholder_image_path" yaml:"placeholder_image_path"`   // Deprecated: use PlaceholderImagePaths
-	PlaceholderImagePaths  []string      `json:"placeholder_image_paths" yaml:"placeholder_image_paths"` // List of placeholder image paths
+	// Global settings (not per-profile)
+	VirtualDisplay DisplayConfig `json:"virtual_display" yaml:"virtual_display"`
+	Overlay        OverlayConfig `json:"overlay" yaml:"overlay"`
+	ServerPort     int           `json:"server_port" yaml:"server_port"`
+	LogLevel       string        `json:"log_level" yaml:"log_level"`
+
+	// Profile management
+	ActiveProfileID string    `json:"active_profile_id" yaml:"active_profile_id"`
+	Profiles        []Profile `json:"profiles" yaml:"profiles"`
+
+	// Legacy fields - populated by Get() from active profile for backwards compat
+	// These are read during migration but not serialized to new config files
+	AllowlistPatterns      []string  `json:"-" yaml:"allowlist_patterns,omitempty"`
+	AllowlistTitlePatterns []string  `json:"-" yaml:"allowlist_title_patterns,omitempty"`
+	AllowlistedApps        []string  `json:"-" yaml:"allowed_apps,omitempty"`
+	AllowlistURLRules      []UrlRule `json:"-" yaml:"allowlist_url_rules,omitempty"`
+	BrowserWindowClasses   []string  `json:"-" yaml:"browser_window_classes,omitempty"`
+	BrowserBlockedClasses  []string  `json:"-" yaml:"browser_blocked_classes,omitempty"`
+	PlaceholderImagePath   string    `json:"-" yaml:"placeholder_image_path,omitempty"`
+	PlaceholderImagePaths  []string  `json:"-" yaml:"placeholder_image_paths,omitempty"`
 }
 
 // OverlayConfig represents overlay configuration
@@ -158,15 +179,23 @@ func NewManager(configFile string) (*Manager, error) {
 
 // getDefaults returns default configuration
 func (m *Manager) getDefaults() *Config {
-	return &Config{
-		ServerPort:             8080,
-		LogLevel:               "info",
+	defaultProfile := Profile{
+		ID:                     "default",
+		Name:                   "Default",
 		AllowlistPatterns:      []string{},
 		AllowlistTitlePatterns: []string{},
 		AllowlistedApps:        []string{},
 		AllowlistURLRules:      []UrlRule{},
 		BrowserWindowClasses:   []string{},
 		BrowserBlockedClasses:  []string{},
+		PlaceholderImagePaths:  []string{},
+	}
+
+	return &Config{
+		ServerPort:      8080,
+		LogLevel:        "info",
+		ActiveProfileID: "default",
+		Profiles:        []Profile{defaultProfile},
 		VirtualDisplay: DisplayConfig{
 			Width:     1920,
 			Height:    1080,
@@ -193,48 +222,124 @@ func (m *Manager) load() error {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Initialize slices if nil
-	if cfg.AllowlistedApps == nil {
-		cfg.AllowlistedApps = []string{}
-	}
-	if cfg.AllowlistPatterns == nil {
-		cfg.AllowlistPatterns = []string{}
-	}
-	if cfg.AllowlistTitlePatterns == nil {
-		cfg.AllowlistTitlePatterns = []string{}
-	}
-	if cfg.AllowlistURLRules == nil {
-		cfg.AllowlistURLRules = []UrlRule{}
-	}
-	if cfg.BrowserWindowClasses == nil {
-		cfg.BrowserWindowClasses = []string{}
-	}
-	if cfg.BrowserBlockedClasses == nil {
-		cfg.BrowserBlockedClasses = []string{}
-	}
+	// Initialize global slices if nil
 	if cfg.Overlay.Widgets == nil {
 		cfg.Overlay.Widgets = []map[string]interface{}{}
 	}
-	if cfg.PlaceholderImagePaths == nil {
-		cfg.PlaceholderImagePaths = []string{}
+	if cfg.Profiles == nil {
+		cfg.Profiles = []Profile{}
 	}
 
-	// Migrate old single placeholder path to new slice format
-	if cfg.PlaceholderImagePath != "" && len(cfg.PlaceholderImagePaths) == 0 {
-		cfg.PlaceholderImagePaths = []string{cfg.PlaceholderImagePath}
-		cfg.PlaceholderImagePath = "" // Clear deprecated field
+	// Check if this is a legacy config (no profiles) and needs migration
+	needsMigration := len(cfg.Profiles) == 0
+
+	if needsMigration {
+		logger.WithComponent("config").Info().Msg("Detected legacy config format, migrating to profile-based config")
+
+		// Initialize legacy slices if nil (needed for migration)
+		if cfg.AllowlistedApps == nil {
+			cfg.AllowlistedApps = []string{}
+		}
+		if cfg.AllowlistPatterns == nil {
+			cfg.AllowlistPatterns = []string{}
+		}
+		if cfg.AllowlistTitlePatterns == nil {
+			cfg.AllowlistTitlePatterns = []string{}
+		}
+		if cfg.AllowlistURLRules == nil {
+			cfg.AllowlistURLRules = []UrlRule{}
+		}
+		if cfg.BrowserWindowClasses == nil {
+			cfg.BrowserWindowClasses = []string{}
+		}
+		if cfg.BrowserBlockedClasses == nil {
+			cfg.BrowserBlockedClasses = []string{}
+		}
+		if cfg.PlaceholderImagePaths == nil {
+			cfg.PlaceholderImagePaths = []string{}
+		}
+
+		// Migrate old single placeholder path to slice format first
+		if cfg.PlaceholderImagePath != "" && len(cfg.PlaceholderImagePaths) == 0 {
+			cfg.PlaceholderImagePaths = []string{cfg.PlaceholderImagePath}
+		}
+
+		// Create default profile from legacy fields
+		defaultProfile := Profile{
+			ID:                     "default",
+			Name:                   "Default",
+			AllowlistPatterns:      cfg.AllowlistPatterns,
+			AllowlistTitlePatterns: cfg.AllowlistTitlePatterns,
+			AllowlistedApps:        cfg.AllowlistedApps,
+			AllowlistURLRules:      cfg.AllowlistURLRules,
+			BrowserWindowClasses:   cfg.BrowserWindowClasses,
+			BrowserBlockedClasses:  cfg.BrowserBlockedClasses,
+			PlaceholderImagePaths:  cfg.PlaceholderImagePaths,
+		}
+
+		cfg.Profiles = []Profile{defaultProfile}
+		cfg.ActiveProfileID = "default"
+
+		// Clear legacy fields (they're now in the profile)
+		cfg.AllowlistPatterns = nil
+		cfg.AllowlistTitlePatterns = nil
+		cfg.AllowlistedApps = nil
+		cfg.AllowlistURLRules = nil
+		cfg.BrowserWindowClasses = nil
+		cfg.BrowserBlockedClasses = nil
+		cfg.PlaceholderImagePath = ""
+		cfg.PlaceholderImagePaths = nil
+
 		logger.WithComponent("config").Info().
-			Msg("Migrated single placeholder image to new multi-image format")
+			Str("profile_id", "default").
+			Msg("Migration complete - created Default profile from existing settings")
+	}
+
+	// Ensure active profile ID is set
+	if cfg.ActiveProfileID == "" && len(cfg.Profiles) > 0 {
+		cfg.ActiveProfileID = cfg.Profiles[0].ID
+	}
+
+	// Initialize nil slices in all profiles
+	for i := range cfg.Profiles {
+		if cfg.Profiles[i].AllowlistPatterns == nil {
+			cfg.Profiles[i].AllowlistPatterns = []string{}
+		}
+		if cfg.Profiles[i].AllowlistTitlePatterns == nil {
+			cfg.Profiles[i].AllowlistTitlePatterns = []string{}
+		}
+		if cfg.Profiles[i].AllowlistedApps == nil {
+			cfg.Profiles[i].AllowlistedApps = []string{}
+		}
+		if cfg.Profiles[i].AllowlistURLRules == nil {
+			cfg.Profiles[i].AllowlistURLRules = []UrlRule{}
+		}
+		if cfg.Profiles[i].BrowserWindowClasses == nil {
+			cfg.Profiles[i].BrowserWindowClasses = []string{}
+		}
+		if cfg.Profiles[i].BrowserBlockedClasses == nil {
+			cfg.Profiles[i].BrowserBlockedClasses = []string{}
+		}
+		if cfg.Profiles[i].PlaceholderImagePaths == nil {
+			cfg.Profiles[i].PlaceholderImagePaths = []string{}
+		}
 	}
 
 	m.mu.Lock()
 	m.config = &cfg
 	m.mu.Unlock()
 
+	// Save migrated config if migration occurred
+	if needsMigration {
+		if err := m.Save(); err != nil {
+			logger.WithComponent("config").Warn().Err(err).Msg("Failed to save migrated config")
+		}
+	}
+
 	return nil
 }
 
-// Get returns the current configuration
+// Get returns the current configuration with legacy fields populated from active profile
 func (m *Manager) Get() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -245,7 +350,60 @@ func (m *Manager) Get() *Config {
 
 	// Return a copy to prevent external modification
 	cfg := *m.config
+
+	// Populate legacy fields from active profile for backwards compatibility
+	if profile := m.getActiveProfileLocked(); profile != nil {
+		cfg.AllowlistPatterns = profile.AllowlistPatterns
+		cfg.AllowlistTitlePatterns = profile.AllowlistTitlePatterns
+		cfg.AllowlistedApps = profile.AllowlistedApps
+		cfg.AllowlistURLRules = profile.AllowlistURLRules
+		cfg.BrowserWindowClasses = profile.BrowserWindowClasses
+		cfg.BrowserBlockedClasses = profile.BrowserBlockedClasses
+		cfg.PlaceholderImagePaths = profile.PlaceholderImagePaths
+	}
+
 	return &cfg
+}
+
+// getActiveProfileLocked returns the active profile (caller must hold at least read lock)
+func (m *Manager) getActiveProfileLocked() *Profile {
+	if m.config == nil {
+		return nil
+	}
+	for i := range m.config.Profiles {
+		if m.config.Profiles[i].ID == m.config.ActiveProfileID {
+			return &m.config.Profiles[i]
+		}
+	}
+	// Fallback to first profile if active not found
+	if len(m.config.Profiles) > 0 {
+		return &m.config.Profiles[0]
+	}
+	return nil
+}
+
+// GetActiveProfile returns a copy of the active profile
+func (m *Manager) GetActiveProfile() *Profile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		return nil
+	}
+	// Return a copy
+	p := *profile
+	return &p
+}
+
+// GetActiveProfileID returns the active profile ID
+func (m *Manager) GetActiveProfileID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.config == nil {
+		return "default"
+	}
+	return m.config.ActiveProfileID
 }
 
 // Save saves the current configuration to disk
@@ -260,10 +418,8 @@ func (m *Manager) Save() error {
 
 	logger.WithComponent("config").Debug().
 		Str("path", m.configPath).
-		Int("allowlisted_count", len(cfg.AllowlistedApps)).
-		Interface("allowed_apps", cfg.AllowlistedApps).
-		Int("pattern_count", len(cfg.AllowlistPatterns)).
-		Interface("patterns", cfg.AllowlistPatterns).
+		Int("profile_count", len(cfg.Profiles)).
+		Str("active_profile", cfg.ActiveProfileID).
 		Msg("Saving config")
 
 	// Ensure the directory exists
@@ -308,14 +464,20 @@ func (m *Manager) Update(cfg *Config) error {
 	return m.Save()
 }
 
-// AddAllowlistedApp adds an application to the allowlist
+// AddAllowlistedApp adds an application to the allowlist of the active profile
 func (m *Manager) AddAllowlistedApp(appClass string) error {
 	// Normalize to lowercase for case-insensitive matching
 	normalized := strings.ToLower(appClass)
 
 	m.mu.Lock()
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+
 	// Check if already exists (prevent duplicates)
-	for _, app := range m.config.AllowlistedApps {
+	for _, app := range profile.AllowlistedApps {
 		if app == normalized {
 			m.mu.Unlock()
 			logger.WithComponent("config").Debug().
@@ -326,8 +488,8 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 	}
 
 	// Append new app
-	m.config.AllowlistedApps = append(m.config.AllowlistedApps, normalized)
-	totalCount := len(m.config.AllowlistedApps)
+	profile.AllowlistedApps = append(profile.AllowlistedApps, normalized)
+	totalCount := len(profile.AllowlistedApps)
 	m.mu.Unlock()
 
 	if err := m.Save(); err != nil {
@@ -345,20 +507,26 @@ func (m *Manager) AddAllowlistedApp(appClass string) error {
 	return nil
 }
 
-// RemoveAllowlistedApp removes an application from the allowlist
+// RemoveAllowlistedApp removes an application from the allowlist of the active profile
 func (m *Manager) RemoveAllowlistedApp(appClass string) error {
 	// Normalize to lowercase for case-insensitive matching
 	normalized := strings.ToLower(appClass)
 
 	m.mu.Lock()
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+
 	// Filter out the app to remove
-	filtered := make([]string, 0, len(m.config.AllowlistedApps))
-	for _, app := range m.config.AllowlistedApps {
+	filtered := make([]string, 0, len(profile.AllowlistedApps))
+	for _, app := range profile.AllowlistedApps {
 		if app != normalized {
 			filtered = append(filtered, app)
 		}
 	}
-	m.config.AllowlistedApps = filtered
+	profile.AllowlistedApps = filtered
 	totalCount := len(filtered)
 	m.mu.Unlock()
 
@@ -373,7 +541,7 @@ func (m *Manager) RemoveAllowlistedApp(appClass string) error {
 	return nil
 }
 
-// IsAllowlisted checks if an application is allowlisted
+// IsAllowlisted checks if an application is allowlisted in the active profile
 func (m *Manager) IsAllowlisted(appClass string) bool {
 	// Normalize to lowercase for case-insensitive matching
 	normalized := strings.ToLower(appClass)
@@ -381,7 +549,12 @@ func (m *Manager) IsAllowlisted(appClass string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, app := range m.config.AllowlistedApps {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		return false
+	}
+
+	for _, app := range profile.AllowlistedApps {
 		if app == normalized {
 			return true
 		}
@@ -389,7 +562,7 @@ func (m *Manager) IsAllowlisted(appClass string) bool {
 	return false
 }
 
-// AddURLRule adds a URL allowlist rule
+// AddURLRule adds a URL allowlist rule to the active profile
 func (m *Manager) AddURLRule(rule UrlRule) error {
 	if rule.ID == "" {
 		return fmt.Errorf("url rule id is required")
@@ -406,33 +579,45 @@ func (m *Manager) AddURLRule(rule UrlRule) error {
 	}
 
 	m.mu.Lock()
-	for _, existing := range m.config.AllowlistURLRules {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+
+	for _, existing := range profile.AllowlistURLRules {
 		if existing.ID == rule.ID {
 			m.mu.Unlock()
 			return nil
 		}
 	}
-	m.config.AllowlistURLRules = append(m.config.AllowlistURLRules, rule)
+	profile.AllowlistURLRules = append(profile.AllowlistURLRules, rule)
 	m.mu.Unlock()
 
 	return m.Save()
 }
 
-// RemoveURLRule removes a URL allowlist rule by ID
+// RemoveURLRule removes a URL allowlist rule by ID from the active profile
 func (m *Manager) RemoveURLRule(ruleID string) error {
 	m.mu.Lock()
-	filtered := make([]UrlRule, 0, len(m.config.AllowlistURLRules))
-	for _, rule := range m.config.AllowlistURLRules {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+
+	filtered := make([]UrlRule, 0, len(profile.AllowlistURLRules))
+	for _, rule := range profile.AllowlistURLRules {
 		if rule.ID != ruleID {
 			filtered = append(filtered, rule)
 		}
 	}
-	m.config.AllowlistURLRules = filtered
+	profile.AllowlistURLRules = filtered
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// AddBrowserWindowClass stores a browser window class for URL-based allowlisting
+// AddBrowserWindowClass stores a browser window class for URL-based allowlisting in the active profile
 func (m *Manager) AddBrowserWindowClass(windowClass string) error {
 	normalized := strings.ToLower(windowClass)
 	if normalized == "" {
@@ -440,18 +625,24 @@ func (m *Manager) AddBrowserWindowClass(windowClass string) error {
 	}
 
 	m.mu.Lock()
-	for _, existing := range m.config.BrowserWindowClasses {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+
+	for _, existing := range profile.BrowserWindowClasses {
 		if existing == normalized {
 			m.mu.Unlock()
 			return nil
 		}
 	}
-	m.config.BrowserWindowClasses = append(m.config.BrowserWindowClasses, normalized)
+	profile.BrowserWindowClasses = append(profile.BrowserWindowClasses, normalized)
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// SetBrowserBlocked sets whether a browser window class is blocked
+// SetBrowserBlocked sets whether a browser window class is blocked in the active profile
 func (m *Manager) SetBrowserBlocked(windowClass string, blocked bool) error {
 	normalized := strings.ToLower(windowClass)
 	if normalized == "" {
@@ -459,8 +650,14 @@ func (m *Manager) SetBrowserBlocked(windowClass string, blocked bool) error {
 	}
 
 	m.mu.Lock()
-	filtered := make([]string, 0, len(m.config.BrowserBlockedClasses))
-	for _, existing := range m.config.BrowserBlockedClasses {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+
+	filtered := make([]string, 0, len(profile.BrowserBlockedClasses))
+	for _, existing := range profile.BrowserBlockedClasses {
 		if existing != normalized {
 			filtered = append(filtered, existing)
 		}
@@ -468,18 +665,23 @@ func (m *Manager) SetBrowserBlocked(windowClass string, blocked bool) error {
 	if blocked {
 		filtered = append(filtered, normalized)
 	}
-	m.config.BrowserBlockedClasses = filtered
+	profile.BrowserBlockedClasses = filtered
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// IsBrowserBlocked checks if a browser window class is blocked
+// IsBrowserBlocked checks if a browser window class is blocked in the active profile
 func (m *Manager) IsBrowserBlocked(windowClass string) bool {
 	normalized := strings.ToLower(windowClass)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, existing := range m.config.BrowserBlockedClasses {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		return false
+	}
+
+	for _, existing := range profile.BrowserBlockedClasses {
 		if existing == normalized {
 			return true
 		}
@@ -487,13 +689,18 @@ func (m *Manager) IsBrowserBlocked(windowClass string) bool {
 	return false
 }
 
-// IsBrowserWindowClass checks if a window class is recognized as a browser
+// IsBrowserWindowClass checks if a window class is recognized as a browser in the active profile
 func (m *Manager) IsBrowserWindowClass(windowClass string) bool {
 	normalized := strings.ToLower(windowClass)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, existing := range m.config.BrowserWindowClasses {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		return false
+	}
+
+	for _, existing := range profile.BrowserWindowClasses {
 		if existing == normalized {
 			return true
 		}
@@ -501,20 +708,30 @@ func (m *Manager) IsBrowserWindowClass(windowClass string) bool {
 	return false
 }
 
-// AddPattern adds an allowlist pattern
+// AddPattern adds an allowlist pattern to the active profile
 func (m *Manager) AddPattern(pattern string) error {
 	m.mu.Lock()
-	m.config.AllowlistPatterns = append(m.config.AllowlistPatterns, pattern)
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+	profile.AllowlistPatterns = append(profile.AllowlistPatterns, pattern)
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// RemovePattern removes an allowlist pattern
+// RemovePattern removes an allowlist pattern from the active profile
 func (m *Manager) RemovePattern(pattern string) error {
 	m.mu.Lock()
-	for i, p := range m.config.AllowlistPatterns {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+	for i, p := range profile.AllowlistPatterns {
 		if p == pattern {
-			m.config.AllowlistPatterns = append(m.config.AllowlistPatterns[:i], m.config.AllowlistPatterns[i+1:]...)
+			profile.AllowlistPatterns = append(profile.AllowlistPatterns[:i], profile.AllowlistPatterns[i+1:]...)
 			break
 		}
 	}
@@ -522,27 +739,37 @@ func (m *Manager) RemovePattern(pattern string) error {
 	return m.Save()
 }
 
-// AddTitlePattern adds a title-only allowlist pattern
+// AddTitlePattern adds a title-only allowlist pattern to the active profile
 func (m *Manager) AddTitlePattern(pattern string) error {
 	m.mu.Lock()
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
 	// Check for duplicates
-	for _, p := range m.config.AllowlistTitlePatterns {
+	for _, p := range profile.AllowlistTitlePatterns {
 		if p == pattern {
 			m.mu.Unlock()
 			return nil // Already exists
 		}
 	}
-	m.config.AllowlistTitlePatterns = append(m.config.AllowlistTitlePatterns, pattern)
+	profile.AllowlistTitlePatterns = append(profile.AllowlistTitlePatterns, pattern)
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// RemoveTitlePattern removes a title-only allowlist pattern
+// RemoveTitlePattern removes a title-only allowlist pattern from the active profile
 func (m *Manager) RemoveTitlePattern(pattern string) error {
 	m.mu.Lock()
-	for i, p := range m.config.AllowlistTitlePatterns {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+	for i, p := range profile.AllowlistTitlePatterns {
 		if p == pattern {
-			m.config.AllowlistTitlePatterns = append(m.config.AllowlistTitlePatterns[:i], m.config.AllowlistTitlePatterns[i+1:]...)
+			profile.AllowlistTitlePatterns = append(profile.AllowlistTitlePatterns[:i], profile.AllowlistTitlePatterns[i+1:]...)
 			break
 		}
 	}
@@ -550,73 +777,88 @@ func (m *Manager) RemoveTitlePattern(pattern string) error {
 	return m.Save()
 }
 
-// SetPlaceholderImage sets the custom placeholder image path
+// SetPlaceholderImage sets the custom placeholder image path (legacy, adds to active profile)
 func (m *Manager) SetPlaceholderImage(path string) error {
-	m.mu.Lock()
-	m.config.PlaceholderImagePath = path
-	m.mu.Unlock()
-	return m.Save()
+	return m.AddPlaceholderImage(path)
 }
 
-// ClearPlaceholderImage clears the custom placeholder image path
+// ClearPlaceholderImage clears all placeholder images from the active profile
 func (m *Manager) ClearPlaceholderImage() error {
-	m.mu.Lock()
-	m.config.PlaceholderImagePath = ""
-	m.mu.Unlock()
-	return m.Save()
+	return m.ClearAllPlaceholderImages()
 }
 
-// GetPlaceholderImagePath returns the custom placeholder image path
+// GetPlaceholderImagePath returns the first placeholder image path
 // Deprecated: Use GetPlaceholderImagePaths instead
 func (m *Manager) GetPlaceholderImagePath() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.config.PlaceholderImagePath
+	paths := m.GetPlaceholderImagePaths()
+	if len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
 }
 
-// AddPlaceholderImage adds a placeholder image path to the list
+// AddPlaceholderImage adds a placeholder image path to the active profile
 func (m *Manager) AddPlaceholderImage(path string) error {
 	m.mu.Lock()
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
 	// Check if already exists (prevent duplicates)
-	for _, p := range m.config.PlaceholderImagePaths {
+	for _, p := range profile.PlaceholderImagePaths {
 		if p == path {
 			m.mu.Unlock()
 			return nil
 		}
 	}
-	m.config.PlaceholderImagePaths = append(m.config.PlaceholderImagePaths, path)
+	profile.PlaceholderImagePaths = append(profile.PlaceholderImagePaths, path)
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// RemovePlaceholderImage removes a placeholder image path from the list
+// RemovePlaceholderImage removes a placeholder image path from the active profile
 func (m *Manager) RemovePlaceholderImage(path string) error {
 	m.mu.Lock()
-	filtered := make([]string, 0, len(m.config.PlaceholderImagePaths))
-	for _, p := range m.config.PlaceholderImagePaths {
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+	filtered := make([]string, 0, len(profile.PlaceholderImagePaths))
+	for _, p := range profile.PlaceholderImagePaths {
 		if p != path {
 			filtered = append(filtered, p)
 		}
 	}
-	m.config.PlaceholderImagePaths = filtered
+	profile.PlaceholderImagePaths = filtered
 	m.mu.Unlock()
 	return m.Save()
 }
 
-// GetPlaceholderImagePaths returns all placeholder image paths
+// GetPlaceholderImagePaths returns all placeholder image paths from the active profile
 func (m *Manager) GetPlaceholderImagePaths() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		return []string{}
+	}
 	// Return a copy to prevent external modification
-	paths := make([]string, len(m.config.PlaceholderImagePaths))
-	copy(paths, m.config.PlaceholderImagePaths)
+	paths := make([]string, len(profile.PlaceholderImagePaths))
+	copy(paths, profile.PlaceholderImagePaths)
 	return paths
 }
 
-// ClearAllPlaceholderImages removes all placeholder image paths
+// ClearAllPlaceholderImages removes all placeholder image paths from the active profile
 func (m *Manager) ClearAllPlaceholderImages() error {
 	m.mu.Lock()
-	m.config.PlaceholderImagePaths = []string{}
+	profile := m.getActiveProfileLocked()
+	if profile == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active profile")
+	}
+	profile.PlaceholderImagePaths = []string{}
 	m.mu.Unlock()
 	return m.Save()
 }
@@ -659,4 +901,283 @@ func (m *Manager) GetConfigPath() string {
 // GetConfigDir returns the config directory path
 func (m *Manager) GetConfigDir() string {
 	return filepath.Dir(m.configPath)
+}
+
+// SetActiveProfile switches to a different profile
+func (m *Manager) SetActiveProfile(profileID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Verify profile exists
+	found := false
+	for _, p := range m.config.Profiles {
+		if p.ID == profileID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("profile not found: %s", profileID)
+	}
+
+	m.config.ActiveProfileID = profileID
+	logger.WithComponent("config").Info().
+		Str("profile_id", profileID).
+		Msg("Switched to profile")
+
+	// Save is called without lock since we defer unlock
+	m.mu.Unlock()
+	err := m.Save()
+	m.mu.Lock()
+	return err
+}
+
+// ListProfiles returns all profiles
+func (m *Manager) ListProfiles() []Profile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.config == nil {
+		return []Profile{}
+	}
+
+	// Return a copy
+	profiles := make([]Profile, len(m.config.Profiles))
+	copy(profiles, m.config.Profiles)
+	return profiles
+}
+
+// GetProfile returns a profile by ID
+func (m *Manager) GetProfile(profileID string) (*Profile, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for i := range m.config.Profiles {
+		if m.config.Profiles[i].ID == profileID {
+			p := m.config.Profiles[i]
+			return &p, nil
+		}
+	}
+	return nil, fmt.Errorf("profile not found: %s", profileID)
+}
+
+// CreateProfile creates a new profile with the given name
+func (m *Manager) CreateProfile(name string) (*Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Generate unique ID
+	id := m.generateProfileID(name)
+
+	profile := Profile{
+		ID:                     id,
+		Name:                   name,
+		AllowlistPatterns:      []string{},
+		AllowlistTitlePatterns: []string{},
+		AllowlistedApps:        []string{},
+		AllowlistURLRules:      []UrlRule{},
+		BrowserWindowClasses:   []string{},
+		BrowserBlockedClasses:  []string{},
+		PlaceholderImagePaths:  []string{},
+	}
+
+	m.config.Profiles = append(m.config.Profiles, profile)
+
+	logger.WithComponent("config").Info().
+		Str("profile_id", id).
+		Str("profile_name", name).
+		Msg("Created new profile")
+
+	// Save without lock
+	m.mu.Unlock()
+	err := m.Save()
+	m.mu.Lock()
+	if err != nil {
+		return nil, err
+	}
+
+	return &profile, nil
+}
+
+// DeleteProfile deletes a profile by ID
+func (m *Manager) DeleteProfile(profileID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if profileID == "default" {
+		return fmt.Errorf("cannot delete the default profile")
+	}
+
+	// Find and remove the profile
+	found := false
+	filtered := make([]Profile, 0, len(m.config.Profiles))
+	for _, p := range m.config.Profiles {
+		if p.ID != profileID {
+			filtered = append(filtered, p)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("profile not found: %s", profileID)
+	}
+
+	m.config.Profiles = filtered
+
+	// If we deleted the active profile, switch to default
+	if m.config.ActiveProfileID == profileID {
+		m.config.ActiveProfileID = "default"
+	}
+
+	logger.WithComponent("config").Info().
+		Str("profile_id", profileID).
+		Msg("Deleted profile")
+
+	// Save without lock
+	m.mu.Unlock()
+	err := m.Save()
+	m.mu.Lock()
+	return err
+}
+
+// UpdateProfile updates an existing profile
+func (m *Manager) UpdateProfile(profile *Profile) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Find and update the profile
+	found := false
+	for i := range m.config.Profiles {
+		if m.config.Profiles[i].ID == profile.ID {
+			m.config.Profiles[i] = *profile
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("profile not found: %s", profile.ID)
+	}
+
+	logger.WithComponent("config").Info().
+		Str("profile_id", profile.ID).
+		Str("profile_name", profile.Name).
+		Msg("Updated profile")
+
+	// Save without lock
+	m.mu.Unlock()
+	err := m.Save()
+	m.mu.Lock()
+	return err
+}
+
+// DuplicateProfile creates a copy of an existing profile with a new name
+func (m *Manager) DuplicateProfile(profileID, newName string) (*Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Find the source profile
+	var source *Profile
+	for i := range m.config.Profiles {
+		if m.config.Profiles[i].ID == profileID {
+			source = &m.config.Profiles[i]
+			break
+		}
+	}
+
+	if source == nil {
+		return nil, fmt.Errorf("profile not found: %s", profileID)
+	}
+
+	// Generate unique ID for the new profile
+	newID := m.generateProfileID(newName)
+
+	// Create a copy with new ID and name
+	newProfile := Profile{
+		ID:                     newID,
+		Name:                   newName,
+		AllowlistPatterns:      make([]string, len(source.AllowlistPatterns)),
+		AllowlistTitlePatterns: make([]string, len(source.AllowlistTitlePatterns)),
+		AllowlistedApps:        make([]string, len(source.AllowlistedApps)),
+		AllowlistURLRules:      make([]UrlRule, len(source.AllowlistURLRules)),
+		BrowserWindowClasses:   make([]string, len(source.BrowserWindowClasses)),
+		BrowserBlockedClasses:  make([]string, len(source.BrowserBlockedClasses)),
+		PlaceholderImagePaths:  make([]string, len(source.PlaceholderImagePaths)),
+	}
+
+	copy(newProfile.AllowlistPatterns, source.AllowlistPatterns)
+	copy(newProfile.AllowlistTitlePatterns, source.AllowlistTitlePatterns)
+	copy(newProfile.AllowlistedApps, source.AllowlistedApps)
+	copy(newProfile.AllowlistURLRules, source.AllowlistURLRules)
+	copy(newProfile.BrowserWindowClasses, source.BrowserWindowClasses)
+	copy(newProfile.BrowserBlockedClasses, source.BrowserBlockedClasses)
+	copy(newProfile.PlaceholderImagePaths, source.PlaceholderImagePaths)
+
+	m.config.Profiles = append(m.config.Profiles, newProfile)
+
+	logger.WithComponent("config").Info().
+		Str("source_id", profileID).
+		Str("new_id", newID).
+		Str("new_name", newName).
+		Msg("Duplicated profile")
+
+	// Save without lock
+	m.mu.Unlock()
+	err := m.Save()
+	m.mu.Lock()
+	if err != nil {
+		return nil, err
+	}
+
+	return &newProfile, nil
+}
+
+// generateProfileID generates a unique profile ID from a name
+func (m *Manager) generateProfileID(name string) string {
+	// Convert name to lowercase and replace spaces with dashes
+	base := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	// Remove any non-alphanumeric characters except dashes
+	var result strings.Builder
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			result.WriteRune(r)
+		}
+	}
+	id := result.String()
+	if id == "" {
+		id = "profile"
+	}
+
+	// Ensure uniqueness
+	originalID := id
+	counter := 1
+	for m.profileIDExists(id) {
+		id = fmt.Sprintf("%s-%d", originalID, counter)
+		counter++
+	}
+
+	return id
+}
+
+// profileIDExists checks if a profile ID already exists (caller must hold lock)
+func (m *Manager) profileIDExists(id string) bool {
+	for _, p := range m.config.Profiles {
+		if p.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// GetProfilePlaceholderDir returns the placeholder directory for a profile
+func (m *Manager) GetProfilePlaceholderDir(profileID string) string {
+	configDir := m.GetConfigDir()
+	return filepath.Join(configDir, "profiles", profileID, "placeholders")
+}
+
+// EnsureProfileDirectory creates the profile directory structure if it doesn't exist
+func (m *Manager) EnsureProfileDirectory(profileID string) error {
+	placeholderDir := m.GetProfilePlaceholderDir(profileID)
+	return os.MkdirAll(placeholderDir, 0755)
 }

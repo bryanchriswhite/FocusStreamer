@@ -22,14 +22,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// ProfileChangeCallback is called when the active profile changes
+type ProfileChangeCallback func(profileID string)
+
 // Server represents the HTTP API server
 type Server struct {
-	router     *mux.Router
-	windowMgr  *window.Manager
-	configMgr  *config.Manager
-	mjpegOut   *output.MJPEGOutput
-	overlayMgr *overlay.Manager
-	upgrader   websocket.Upgrader
+	router                  *mux.Router
+	windowMgr               *window.Manager
+	configMgr               *config.Manager
+	mjpegOut                *output.MJPEGOutput
+	overlayMgr              *overlay.Manager
+	upgrader                websocket.Upgrader
+	onProfileChangeCallback ProfileChangeCallback
 }
 
 // NewServer creates a new API server
@@ -49,6 +53,11 @@ func NewServer(windowMgr *window.Manager, configMgr *config.Manager, displayMgr 
 
 	s.setupRoutes()
 	return s
+}
+
+// SetOnProfileChange sets the callback for profile changes
+func (s *Server) SetOnProfileChange(callback ProfileChangeCallback) {
+	s.onProfileChangeCallback = callback
 }
 
 // setupRoutes configures the API routes
@@ -89,6 +98,16 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/config/placeholder-images", s.handleUploadPlaceholders).Methods("POST")
 	api.HandleFunc("/config/placeholder-images/{id}", s.handleGetPlaceholderByID).Methods("GET")
 	api.HandleFunc("/config/placeholder-images/{id}", s.handleDeletePlaceholderByID).Methods("DELETE")
+
+	// Profile management
+	api.HandleFunc("/profiles", s.handleListProfiles).Methods("GET")
+	api.HandleFunc("/profiles", s.handleCreateProfile).Methods("POST")
+	api.HandleFunc("/profiles/active", s.handleGetActiveProfile).Methods("GET")
+	api.HandleFunc("/profiles/active", s.handleSetActiveProfile).Methods("PUT")
+	api.HandleFunc("/profiles/{id}", s.handleGetProfile).Methods("GET")
+	api.HandleFunc("/profiles/{id}", s.handleUpdateProfile).Methods("PUT")
+	api.HandleFunc("/profiles/{id}", s.handleDeleteProfile).Methods("DELETE")
+	api.HandleFunc("/profiles/{id}/duplicate", s.handleDuplicateProfile).Methods("POST")
 
 	// Overlay management
 	api.HandleFunc("/overlay/types", s.handleGetWidgetTypes).Methods("GET")
@@ -1248,4 +1267,164 @@ func generateRuleID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// Profile API handlers
+
+func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
+	profiles := s.configMgr.ListProfiles()
+	activeID := s.configMgr.GetActiveProfileID()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"profiles":          profiles,
+		"active_profile_id": activeID,
+	})
+}
+
+func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Profile name is required", http.StatusBadRequest)
+		return
+	}
+
+	profile, err := s.configMgr.CreateProfile(req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(profile)
+}
+
+func (s *Server) handleGetActiveProfile(w http.ResponseWriter, r *http.Request) {
+	profile := s.configMgr.GetActiveProfile()
+	if profile == nil {
+		http.Error(w, "No active profile", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profile)
+}
+
+func (s *Server) handleSetActiveProfile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProfileID string `json:"profile_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ProfileID == "" {
+		http.Error(w, "Profile ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.configMgr.SetActiveProfile(req.ProfileID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Notify callback if set
+	if s.onProfileChangeCallback != nil {
+		s.onProfileChangeCallback(req.ProfileID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":     "success",
+		"profile_id": req.ProfileID,
+	})
+}
+
+func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	profileID := vars["id"]
+
+	profile, err := s.configMgr.GetProfile(profileID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profile)
+}
+
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	profileID := vars["id"]
+
+	var profile config.Profile
+	if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure the ID matches the URL
+	profile.ID = profileID
+
+	if err := s.configMgr.UpdateProfile(&profile); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profile)
+}
+
+func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	profileID := vars["id"]
+
+	if err := s.configMgr.DeleteProfile(profileID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (s *Server) handleDuplicateProfile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	profileID := vars["id"]
+
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "New profile name is required", http.StatusBadRequest)
+		return
+	}
+
+	newProfile, err := s.configMgr.DuplicateProfile(profileID, req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newProfile)
 }
