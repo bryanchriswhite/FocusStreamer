@@ -101,6 +101,12 @@ type Manager struct {
 	// Placeholder rotation state
 	wasInStandby          bool // True if previous frame was showing placeholder
 	currentPlaceholderIdx int  // Index of currently selected placeholder (-1 = default)
+
+	// Health monitoring
+	lastFrameTime        time.Time
+	lastFrameIntervalWarn time.Time
+	consecutiveFailures  int
+	healthMu             sync.RWMutex
 }
 
 // NewManager creates a new window manager with auto-detected backend
@@ -470,6 +476,64 @@ func (m *Manager) notifyListeners(window *config.WindowInfo) {
 			// Skip if channel is full
 		}
 	}
+}
+
+// WindowState represents the state of a window for capture decisions
+type WindowState int
+
+const (
+	WindowStateInvalid     WindowState = iota // Window doesn't exist or has bad geometry
+	WindowStateValid                          // Window exists but not capturable (obscured/minimized)
+	WindowStateCapturable                     // Window exists and can be captured
+)
+
+// checkWindowState checks both validity and capturability in a single set of X11 calls
+// Returns: state (invalid/valid/capturable)
+func (m *Manager) checkWindowState(window *config.WindowInfo) WindowState {
+	if window == nil {
+		return WindowStateInvalid
+	}
+
+	log := logger.WithComponent("window-state")
+
+	// Check window attributes via X11 - single call for both existence and map state
+	attrs, err := xproto.GetWindowAttributes(m.conn, xproto.Window(window.ID)).Reply()
+	if err != nil {
+		// On Wayland, X11 window attributes may fail even for valid windows
+		// This is handled via class-based recovery in the streaming loop
+		return WindowStateInvalid
+	}
+
+	// Check geometry to ensure window has reasonable size
+	geom, err := xproto.GetGeometry(m.conn, xproto.Drawable(window.ID)).Reply()
+	if err != nil {
+		// On Wayland, X11 geometry queries may fail even for valid windows
+		return WindowStateInvalid
+	}
+
+	// Window should have reasonable dimensions (at least 10x10)
+	if geom.Width < 10 || geom.Height < 10 {
+		log.Debug().
+			Uint32("window_id", window.ID).
+			Str("window_class", window.Class).
+			Uint16("width", geom.Width).
+			Uint16("height", geom.Height).
+			Msg("Window has invalid geometry")
+		return WindowStateInvalid
+	}
+
+	// Window exists with valid geometry - check if capturable
+	if attrs.MapState == xproto.MapStateViewable {
+		return WindowStateCapturable
+	}
+
+	// Window exists but not viewable (obscured/minimized)
+	log.Debug().
+		Uint32("window_id", window.ID).
+		Str("window_class", window.Class).
+		Uint8("map_state", attrs.MapState).
+		Msg("Window not viewable")
+	return WindowStateValid
 }
 
 // FindWindowByClass finds the first window with the given class
@@ -859,9 +923,90 @@ func (m *Manager) streamLoop(fps int) {
 	}
 }
 
+// captureState holds a consistent snapshot of state needed for frame capture
+type captureState struct {
+	forceStandby      bool
+	wasInStandby      bool
+	allowlistBypass   bool
+	lastAllowedWindow *config.WindowInfo
+	currentWindow     *config.WindowInfo
+}
+
+// getCaptureState returns a consistent snapshot of capture-related state
+func (m *Manager) getCaptureState() captureState {
+	m.streamMu.Lock()
+	state := captureState{
+		forceStandby:      m.forceStandby,
+		wasInStandby:      m.wasInStandby,
+		allowlistBypass:   m.allowlistBypass,
+		lastAllowedWindow: m.lastAllowedWindow,
+	}
+	m.streamMu.Unlock()
+
+	m.mu.RLock()
+	state.currentWindow = m.currentWindow
+	m.mu.RUnlock()
+
+	return state
+}
+
+// updateCaptureState updates the capture state after processing
+func (m *Manager) updateCaptureState(wasInStandby bool, lastAllowed *config.WindowInfo) {
+	m.streamMu.Lock()
+	m.wasInStandby = wasInStandby
+	if lastAllowed != nil {
+		m.lastAllowedWindow = lastAllowed
+	}
+	m.streamMu.Unlock()
+}
+
+// clearLastAllowedWindow clears the last allowed window
+func (m *Manager) clearLastAllowedWindow() {
+	m.streamMu.Lock()
+	m.lastAllowedWindow = nil
+	m.streamMu.Unlock()
+}
+
 // captureAndStream captures the current focused window and sends it to the output
 func (m *Manager) captureAndStream() {
 	log := logger.WithComponent("stream")
+
+	// Track frame timing for health monitoring
+	frameStart := time.Now()
+	m.healthMu.Lock()
+	lastFrame := m.lastFrameTime
+	m.lastFrameTime = frameStart
+	m.healthMu.Unlock()
+
+	// Warn if frame interval is too long (>3x expected interval)
+	// Rate-limit to once per 10 seconds to avoid log spam
+	if !lastFrame.IsZero() {
+		interval := frameStart.Sub(lastFrame)
+		// Calculate threshold based on actual FPS setting
+		cfg := m.configMgr.Get()
+		fps := cfg.VirtualDisplay.FPS
+		if fps <= 0 {
+			fps = 10 // default
+		}
+		expectedInterval := time.Second / time.Duration(fps)
+		threshold := expectedInterval * 3 // 3x expected = real stall
+
+		if interval > threshold {
+			m.healthMu.Lock()
+			lastWarn := m.lastFrameIntervalWarn
+			if frameStart.Sub(lastWarn) > 10*time.Second {
+				m.lastFrameIntervalWarn = frameStart
+				m.healthMu.Unlock()
+				log.Warn().
+					Dur("interval", interval).
+					Dur("threshold", threshold).
+					Int("fps", fps).
+					Msg("Frame interval exceeds threshold - possible stall")
+			} else {
+				m.healthMu.Unlock()
+			}
+		}
+	}
 
 	// Track whether this frame shows standby/placeholder
 	showingStandby := false
@@ -895,10 +1040,12 @@ func (m *Manager) captureAndStream() {
 	currentWin := m.currentWindow
 	m.mu.RUnlock()
 
+	// Get current desktop once for all checks
+	currentDesktop := m.backend.GetCurrentDesktop()
+
 	// Check if window is on current desktop
 	// Desktop -1 means window is on all desktops (sticky)
 	if currentWin != nil {
-		currentDesktop := m.backend.GetCurrentDesktop()
 		if currentWin.Desktop != -1 && currentWin.Desktop != currentDesktop {
 			log.Debug().
 				Int("window_desktop", currentWin.Desktop).
@@ -909,67 +1056,72 @@ func (m *Manager) captureAndStream() {
 		}
 	}
 
-	if currentWin == nil {
-		// No window focused (or not on current desktop) - send placeholder
-		showingStandby = true
-		// Detect transition TO standby for rotation
-		if !wasInStandby {
-			m.rotatePlaceholder()
-		}
-		if m.output != nil {
-			cfg := m.configMgr.Get()
-			placeholder := m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
-			m.output.WriteFrame(placeholder)
-		}
-		// Update wasInStandby before returning
-		m.streamMu.Lock()
-		m.wasInStandby = showingStandby
-		m.streamMu.Unlock()
-		return
-	}
-
 	var windowToCapture *config.WindowInfo
 	var usePlaceholder bool
 
 	// Check allowlist bypass mode
 	m.streamMu.Lock()
 	bypassEnabled := m.allowlistBypass
+	lastAllowed := m.lastAllowedWindow
 	m.streamMu.Unlock()
 
-	// Check if current window is allowlisted (or bypass is enabled)
-	isAllowlisted := bypassEnabled || m.IsWindowAllowlisted(currentWin)
-	if isAllowlisted {
-		// Current window is allowlisted - use it and save as last allowed
-		windowToCapture = currentWin
-		m.streamMu.Lock()
-		m.lastAllowedWindow = currentWin
-		m.streamMu.Unlock()
-	} else {
-		// Current window is not allowlisted - use last allowed window if available
-		m.streamMu.Lock()
-		lastAllowed := m.lastAllowedWindow
-		m.streamMu.Unlock()
-
+	if currentWin == nil {
+		// No window focused (or not on current desktop) - try to use last allowed window
 		if lastAllowed != nil {
-			// Check if the last allowed window is the SAME window as current (e.g., browser tab changed)
-			// If same window but title changed and no longer matches, clear it
-			if lastAllowed.ID == currentWin.ID {
-				// Same window but title changed to non-matching - clear last allowed
-				m.streamMu.Lock()
-				m.lastAllowedWindow = nil
-				m.streamMu.Unlock()
-				usePlaceholder = true
+			// Check window state in a single X11 call
+			state := m.checkWindowState(lastAllowed)
+
+			if state == WindowStateInvalid {
+				// Window ID might be stale - try to find window by class before giving up
+				refreshedWin, err := m.FindWindowByClass(lastAllowed.Class)
+				refreshedOnCurrentDesktop := refreshedWin != nil && (refreshedWin.Desktop == -1 || refreshedWin.Desktop == currentDesktop)
+				if err == nil && refreshedOnCurrentDesktop && (bypassEnabled || m.IsWindowAllowlisted(refreshedWin)) {
+					// Found the window by class on current desktop - try to capture it
+					// On Wayland, X11 state checks may fail but capture can still work via PipeWire
+					// Only log when window ID actually changes to avoid spam
+					if refreshedWin.ID != lastAllowed.ID {
+						log.Debug().
+							Uint32("old_window_id", lastAllowed.ID).
+							Uint32("new_window_id", refreshedWin.ID).
+							Str("window_class", lastAllowed.Class).
+							Msg("Recovered window by class with new ID")
+					}
+					m.streamMu.Lock()
+					m.lastAllowedWindow = refreshedWin
+					m.streamMu.Unlock()
+					windowToCapture = refreshedWin
+				} else {
+					if err == nil && !refreshedOnCurrentDesktop {
+						log.Debug().
+							Uint32("window_id", refreshedWin.ID).
+							Str("window_class", refreshedWin.Class).
+							Int("window_desktop", refreshedWin.Desktop).
+							Int("current_desktop", currentDesktop).
+							Msg("Recovered window by class but not on current desktop")
+					} else {
+						log.Debug().
+							Uint32("window_id", lastAllowed.ID).
+							Str("window_class", lastAllowed.Class).
+							Msg("Last allowed window no longer valid (closed)")
+					}
+					m.streamMu.Lock()
+					m.lastAllowedWindow = nil
+					m.streamMu.Unlock()
+					usePlaceholder = true
+				}
 			} else {
-				// Check if last allowed window is on current desktop
-				currentDesktop := m.backend.GetCurrentDesktop()
 				lastAllowedOnCurrentDesktop := lastAllowed.Desktop == -1 || lastAllowed.Desktop == currentDesktop
 
-				// Different window - re-verify the last allowed window is still allowlisted
-				// and on the current desktop (or bypass is enabled)
 				if lastAllowedOnCurrentDesktop && (bypassEnabled || m.IsWindowAllowlisted(lastAllowed)) {
-					windowToCapture = lastAllowed
+					if state == WindowStateCapturable {
+						windowToCapture = lastAllowed
+					} else {
+						// Window exists but not capturable (obscured/minimized) - show placeholder
+						// but keep lastAllowedWindow for when it becomes capturable again
+						usePlaceholder = true
+					}
 				} else {
-					// Last allowed window no longer matches or not on current desktop - clear it
+					// Last allowed window no longer valid for capture (wrong desktop or not allowlisted)
 					if !lastAllowedOnCurrentDesktop {
 						log.Debug().
 							Int("window_desktop", lastAllowed.Desktop).
@@ -984,8 +1136,108 @@ func (m *Manager) captureAndStream() {
 				}
 			}
 		} else {
-			// No allowlisted window yet - show placeholder
 			usePlaceholder = true
+		}
+	} else {
+		// Check if current window is allowlisted (or bypass is enabled)
+		isAllowlisted := bypassEnabled || m.IsWindowAllowlisted(currentWin)
+		if isAllowlisted {
+			// Current window is allowlisted - use it and save as last allowed
+			windowToCapture = currentWin
+			m.streamMu.Lock()
+			m.lastAllowedWindow = currentWin
+			m.streamMu.Unlock()
+		} else {
+			// Current window is not allowlisted - use last allowed window if available
+			if lastAllowed != nil {
+				// Check if same window (e.g., browser tab changed to non-matching title)
+				if lastAllowed.ID == currentWin.ID {
+					log.Debug().
+						Uint32("current_id", currentWin.ID).
+						Str("current_class", currentWin.Class).
+						Msg("Current window same as lastAllowed but no longer allowlisted")
+					m.streamMu.Lock()
+					m.lastAllowedWindow = nil
+					m.streamMu.Unlock()
+					usePlaceholder = true
+				} else {
+					// Check window state in a single X11 call
+					state := m.checkWindowState(lastAllowed)
+
+					if state == WindowStateInvalid {
+						// Window ID might be stale - try to find window by class before giving up
+						refreshedWin, err := m.FindWindowByClass(lastAllowed.Class)
+						refreshedOnCurrentDesktop := refreshedWin != nil && (refreshedWin.Desktop == -1 || refreshedWin.Desktop == currentDesktop)
+						if err == nil && refreshedOnCurrentDesktop && (bypassEnabled || m.IsWindowAllowlisted(refreshedWin)) {
+							// Found the window by class on current desktop - try to capture it
+							// On Wayland, X11 state checks may fail but capture can still work via PipeWire
+							// Only log when window ID actually changes to avoid spam
+							if refreshedWin.ID != lastAllowed.ID {
+								log.Debug().
+									Uint32("old_window_id", lastAllowed.ID).
+									Uint32("new_window_id", refreshedWin.ID).
+									Str("window_class", lastAllowed.Class).
+									Msg("Recovered window by class with new ID")
+							}
+							m.streamMu.Lock()
+							m.lastAllowedWindow = refreshedWin
+							m.streamMu.Unlock()
+							windowToCapture = refreshedWin
+						} else {
+							if err == nil && !refreshedOnCurrentDesktop {
+								log.Debug().
+									Uint32("window_id", refreshedWin.ID).
+									Str("window_class", refreshedWin.Class).
+									Int("window_desktop", refreshedWin.Desktop).
+									Int("current_desktop", currentDesktop).
+									Msg("Recovered window by class but not on current desktop")
+							} else {
+								log.Debug().
+									Uint32("window_id", lastAllowed.ID).
+									Str("window_class", lastAllowed.Class).
+									Msg("Last allowed window no longer valid (closed)")
+							}
+							m.streamMu.Lock()
+							m.lastAllowedWindow = nil
+							m.streamMu.Unlock()
+							usePlaceholder = true
+						}
+					} else {
+						lastAllowedOnCurrentDesktop := lastAllowed.Desktop == -1 || lastAllowed.Desktop == currentDesktop
+						lastAllowedStillAllowlisted := bypassEnabled || m.IsWindowAllowlisted(lastAllowed)
+
+						if lastAllowedOnCurrentDesktop && lastAllowedStillAllowlisted {
+							if state == WindowStateCapturable {
+								windowToCapture = lastAllowed
+							} else {
+								// Window exists but not capturable - show placeholder but keep reference
+								log.Debug().
+									Uint32("window_id", lastAllowed.ID).
+									Str("window_class", lastAllowed.Class).
+									Int("state", int(state)).
+									Msg("Last allowed window not capturable (obscured/minimized)")
+								usePlaceholder = true
+							}
+						} else {
+							log.Debug().
+								Uint32("window_id", lastAllowed.ID).
+								Str("window_class", lastAllowed.Class).
+								Bool("on_current_desktop", lastAllowedOnCurrentDesktop).
+								Bool("still_allowlisted", lastAllowedStillAllowlisted).
+								Int("window_desktop", lastAllowed.Desktop).
+								Int("current_desktop", currentDesktop).
+								Msg("Last allowed window no longer valid for fallback")
+							m.streamMu.Lock()
+							m.lastAllowedWindow = nil
+							m.streamMu.Unlock()
+							usePlaceholder = true
+						}
+					}
+				}
+			} else {
+				// No allowlisted window yet - show placeholder
+				usePlaceholder = true
+			}
 		}
 	}
 
@@ -1039,6 +1291,21 @@ func (m *Manager) captureAndStream() {
 
 		// If capture failed, clear lastAllowedWindow and send placeholder
 		if img == nil {
+			// Track consecutive failures for health monitoring
+			m.healthMu.Lock()
+			m.consecutiveFailures++
+			failures := m.consecutiveFailures
+			m.healthMu.Unlock()
+
+			// Log warning at thresholds
+			if failures == 5 || failures%50 == 0 {
+				log.Warn().
+					Int("consecutive_failures", failures).
+					Str("window_class", windowToCapture.Class).
+					Uint32("window_id", windowToCapture.ID).
+					Msg("Consecutive capture failures - window may be closed or inaccessible")
+			}
+
 			showingStandby = true
 			// Detect transition TO standby for rotation
 			if !wasInStandby {
@@ -1050,6 +1317,11 @@ func (m *Manager) captureAndStream() {
 
 			cfg := m.configMgr.Get()
 			img = m.createPlaceholderFrame(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height)
+		} else {
+			// Reset consecutive failures on successful capture
+			m.healthMu.Lock()
+			m.consecutiveFailures = 0
+			m.healthMu.Unlock()
 		}
 	}
 
@@ -1539,6 +1811,45 @@ func (m *Manager) scaleAndLetterbox(src *image.RGBA, out output.Output) *image.R
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, srcBounds, xdraw.Src, nil)
 
 	return dst
+}
+
+// HealthStatus contains streaming health information
+type HealthStatus struct {
+	LastFrameTime       time.Time `json:"last_frame_time"`
+	FrameAge            string    `json:"frame_age"`
+	ConsecutiveFailures int       `json:"consecutive_failures"`
+	IsHealthy           bool      `json:"is_healthy"`
+	StreamRunning       bool      `json:"stream_running"`
+}
+
+// GetHealthStatus returns the current health status of the stream
+func (m *Manager) GetHealthStatus() HealthStatus {
+	m.healthMu.RLock()
+	lastFrame := m.lastFrameTime
+	failures := m.consecutiveFailures
+	m.healthMu.RUnlock()
+
+	m.streamMu.Lock()
+	running := m.streamRunning
+	m.streamMu.Unlock()
+
+	var frameAge string
+	if lastFrame.IsZero() {
+		frameAge = "never"
+	} else {
+		frameAge = time.Since(lastFrame).Round(time.Millisecond).String()
+	}
+
+	// Consider unhealthy if: not running, >5 consecutive failures, or frame age > 1s
+	isHealthy := running && failures < 5 && (lastFrame.IsZero() || time.Since(lastFrame) < time.Second)
+
+	return HealthStatus{
+		LastFrameTime:       lastFrame,
+		FrameAge:            frameAge,
+		ConsecutiveFailures: failures,
+		IsHealthy:           isHealthy,
+		StreamRunning:       running,
+	}
 }
 
 // OnProfileChanged should be called when the active profile changes.
